@@ -1,0 +1,22 @@
+{
+  "name": "cobalt-telegram-bot-serverless",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Cobalt downloader bot and its Mini App on Telegram Serverless",
+  "type": "module",
+  "scripts": {
+    "predeploy": "node scripts/check-secrets.mjs",
+    "deploy": "tgcloud push",
+    "status": "tgcloud status",
+    "migrate": "tgcloud migrate",
+    "run": "tgcloud run",
+    "check": "node scripts/check-secrets.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --import ./test/register.mjs --test \"test/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

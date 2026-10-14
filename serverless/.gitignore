@@ -1,0 +1,4 @@
+.tgcloud/
+node_modules/
+# Your bot's settings and keys. Deployed with the rest of tgcloud/, never committed.
+tgcloud/lib/secrets.js

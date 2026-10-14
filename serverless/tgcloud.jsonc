@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
+  // The Mini App: plain HTML, CSS and JS with no build step, so `push` uploads
+  // this folder as it is. Served at https://app<app_id>.tgcloud.ai/
+  "static": {
+    "source": "miniapp",
+    "headers": [
+      // File names are not content-hashed: make browsers revalidate, so a
+      // deploy reaches users right away.
+      { "path": "/*", "set": { "Cache-Control": "no-cache", "Referrer-Policy": "no-referrer" } }
+    ]
+  }
+}
