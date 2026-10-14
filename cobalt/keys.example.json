@@ -1,0 +1,6 @@
+{
+  "00000000-0000-4000-8000-000000000000": {
+    "name": "telegram-bot: replace this UUID with your own (./setup.sh public does it)",
+    "limit": "unlimited"
+  }
+}

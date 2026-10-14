@@ -1,0 +1,52 @@
+# Public setup for Telegram Serverless.
+#
+# The bot itself runs on Telegram Serverless (serverless/). This server keeps
+# what JavaScript in a sandbox cannot do: the download worker (yt-dlp + ffmpeg)
+# and a Cobalt instance, both behind HTTPS on one domain:
+#
+#   https://PUBLIC_DOMAIN/worker/...  -> bot (BOT_MODE=worker)
+#   https://PUBLIC_DOMAIN/...         -> cobalt, API key required
+#
+# Turn it on in .env (./setup.sh public prepares the rest):
+#   COMPOSE_PATH_SEPARATOR=:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml
+#   PUBLIC_DOMAIN=dl.example.com
+services:
+  bot:
+    environment:
+      BOT_MODE: worker
+    expose:
+      - "8080"
+
+  cobalt:
+    environment:
+      # Tunnel links are built from this, and the serverless bot and the Mini
+      # App download through them, so it must be the public address.
+      API_URL: "https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in .env}/"
+      # Nobody without a key from cobalt/keys.json gets in.
+      API_KEY_URL: "file:///keys.json"
+      API_AUTH_REQUIRED: "1"
+    volumes:
+      - ./cobalt/keys.json:/keys.json:ro
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    depends_on:
+      - bot
+      - cobalt
+    environment:
+      PUBLIC_DOMAIN: "${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in .env}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

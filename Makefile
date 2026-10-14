@@ -1,9 +1,9 @@
-.PHONY: init up down logs build test lint
+.PHONY: init up down logs build test
 
 init:
 	./setup.sh
 
-# Build first: `up` then only waits for the YouTube session, not for apt.
+# Build first, so `up` itself only takes seconds.
 up:
 	docker compose build
 	docker compose up -d

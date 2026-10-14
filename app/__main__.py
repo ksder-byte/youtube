@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import sys
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -18,6 +21,7 @@ from .cobalt import CobaltClient
 from .config import Settings, load_settings
 from .context import Context
 from .handlers import router
+from .worker import serve as serve_worker
 
 log = logging.getLogger("bot")
 
@@ -115,6 +119,38 @@ async def connect(bot: Bot, settings: Settings, attempts: int = 10, delay: float
     raise AssertionError("unreachable")
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def guard_webhook(bot: Bot) -> None:
+    """Polling deletes the webhook. If Telegram Serverless (or anything else)
+    owns it, that silently steals the bot — refuse instead."""
+    info = await bot.get_webhook_info()
+    if not info.url:
+        return
+    if _env_flag("TAKE_OVER_WEBHOOK"):
+        log.warning("Taking the bot over from the webhook at %s", info.url)
+        return
+    raise StartupError(
+        f"The bot already has a webhook: {info.url}"
+        "\n  - if the bot lives on Telegram Serverless, run this container as its"
+        "\n    download worker instead: BOT_MODE=worker (see README)"
+        "\n  - to move the bot back to long polling on purpose, set"
+        "\n    TAKE_OVER_WEBHOOK=true once; `npx tgcloud webhook sync` gives it back"
+    )
+
+
+def stop_event() -> asyncio.Event:
+    """Set on SIGTERM/SIGINT, so `docker compose stop` shuts the worker down cleanly."""
+    event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with suppress(NotImplementedError):  # Windows
+            loop.add_signal_handler(sig, event.set)
+    return event
+
+
 async def run(settings: Settings) -> None:
     cobalt = CobaltClient(
         list(settings.cobalt_endpoints),
@@ -149,7 +185,7 @@ async def run(settings: Settings) -> None:
     dispatcher.include_router(router)
 
     try:
-        # Cobalt boots slower than the bot: yt-session-generator has to warm up first.
+        # Cobalt may still be booting when the bot container starts.
         await cobalt.wait_until_ready()
 
         if settings.limit_exceeds_telegram:
@@ -167,11 +203,19 @@ async def run(settings: Settings) -> None:
             "Cobalt instances (in order): %s",
             ", ".join(e.label for e in settings.cobalt_endpoints),
         )
+
+        if settings.is_worker:
+            # Commands, the webhook and the subscription gate belong to the
+            # serverless bot; the worker only downloads and sends.
+            await serve_worker(bot, dispatcher["ctx"], stop_event())
+            return
+
         if settings.subscription_required:
             log.info("Forced subscription is on: %s", settings.required_channel)
         else:
             log.info("Forced subscription is off (REQUIRED_CHANNEL is empty)")
 
+        await guard_webhook(bot)
         await bot.set_my_commands(COMMANDS)
         await bot.delete_webhook(drop_pending_updates=True)
         await dispatcher.start_polling(bot, handle_signals=True)

@@ -15,6 +15,9 @@ load_dotenv()
 VIDEO_QUALITIES = ("144", "240", "360", "480", "720", "1080", "1440", "2160", "max")
 AUDIO_FORMATS = ("best", "mp3", "ogg", "wav", "opus")
 YOUTUBE_CODECS = ("h264", "av1", "vp9")
+# polling: a standalone bot. worker: downloads only, jobs come from the bot on
+# Telegram Serverless (see serverless/ and app/worker.py).
+BOT_MODES = ("polling", "worker")
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -103,6 +106,21 @@ class Settings:
     api_timeout: int
     download_timeout: int
     log_level: str
+    bot_mode: str = "polling"
+    worker_secret: str | None = None
+    worker_host: str = "0.0.0.0"
+    worker_port: int = 8080
+    worker_max_queue: int = 20
+
+    @property
+    def is_worker(self) -> bool:
+        return self.bot_mode == "worker"
+
+    @property
+    def can_use_local_api(self) -> bool:
+        """A local Bot API server needs the bot logged out of the cloud API,
+        which would cut Telegram Serverless off from its own webhook."""
+        return not self.is_worker
 
     @property
     def max_download_bytes(self) -> int:
@@ -142,6 +160,22 @@ def load_settings() -> Settings:
     if max_download_mb < 1:
         raise RuntimeError("MAX_DOWNLOAD_MB must be >= 1")
 
+    bot_mode = _choice("BOT_MODE", "polling", BOT_MODES)
+    worker_secret = _env("WORKER_SECRET")
+    telegram_api_url = (_env("TELEGRAM_API_URL") or "").rstrip("/") or None
+    if bot_mode == "worker":
+        if not worker_secret or len(worker_secret) < 32:
+            raise RuntimeError(
+                "BOT_MODE=worker needs WORKER_SECRET of at least 32 characters, "
+                "the same value as WORKER_SECRET in serverless/tgcloud/lib/secrets.js. "
+                "Generate one: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        if telegram_api_url:
+            raise RuntimeError(
+                "BOT_MODE=worker cannot use TELEGRAM_API_URL: a local Bot API server "
+                "takes the bot away from the cloud API, and Telegram Serverless with it"
+            )
+
     return Settings(
         bot_token=token,
         cobalt_endpoints=_endpoints("COBALT_API_URL", "http://cobalt:9000", api_key),
@@ -158,11 +192,16 @@ def load_settings() -> Settings:
         ytdlp_for_youtube=_bool("YTDLP_FOR_YOUTUBE", True),
         ytdlp_fallback_to_cobalt=_bool("YTDLP_FALLBACK_TO_COBALT", False),
         ytdlp_cookies_file=_env("YTDLP_COOKIES_FILE"),
-        telegram_api_url=(_env("TELEGRAM_API_URL") or "").rstrip("/") or None,
+        telegram_api_url=telegram_api_url,
         telegram_api_local=_bool("TELEGRAM_API_LOCAL_MODE", True),
         telegram_timeout=_int("TELEGRAM_TIMEOUT", 900),
         max_concurrent_downloads=max(1, _int("MAX_CONCURRENT_DOWNLOADS", 3)),
         api_timeout=_int("API_TIMEOUT", 60),
         download_timeout=_int("DOWNLOAD_TIMEOUT", 900),
         log_level=(_env("LOG_LEVEL") or "INFO").upper(),
+        bot_mode=bot_mode,
+        worker_secret=worker_secret,
+        worker_host=_env("WORKER_HOST") or "0.0.0.0",
+        worker_port=_int("WORKER_PORT", 8080),
+        worker_max_queue=max(1, _int("WORKER_MAX_QUEUE", 20)),
     )

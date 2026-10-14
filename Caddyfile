@@ -1,0 +1,17 @@
+# Used by docker-compose.public.yml. Caddy gets a Let's Encrypt certificate for
+# PUBLIC_DOMAIN by itself: point the domain's A/AAAA record at this server and
+# keep ports 80 and 443 open.
+{$PUBLIC_DOMAIN} {
+	# The download worker: jobs from the bot on Telegram Serverless.
+	handle /worker/* {
+		reverse_proxy bot:8080
+	}
+
+	# Everything else is the Cobalt API, its /tunnel links included.
+	handle {
+		reverse_proxy cobalt:9000 {
+			# Stream files as they come instead of buffering them.
+			flush_interval -1
+		}
+	}
+}

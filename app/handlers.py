@@ -25,6 +25,7 @@ from .cobalt import (
     CobaltResult,
     CobaltUnavailable,
 )
+from .config import Settings
 from .context import Context
 from .downloader import EmptyDownload, FileTooLarge, download_file, safe_filename
 from .keyboards import (
@@ -271,8 +272,11 @@ async def run_job(
     token: str,
     mode: str,
     quality: str,
+    settings: Settings | None = None,
 ) -> None:
-    settings = ctx.settings
+    """`settings` overrides ctx.settings for one job (per-user preferences
+    handed over by the serverless bot)."""
+    settings = settings or ctx.settings
     effective_quality = quality if quality != "-" else settings.video_quality
 
     if settings.ytdlp_for_youtube and ytdlp.is_youtube(url):
@@ -285,6 +289,7 @@ async def run_job(
             token=token,
             mode=mode,
             quality=effective_quality,
+            settings=settings,
         )
         if handled:
             return
@@ -351,13 +356,17 @@ async def run_job(
         size_mb = exc.size_bytes / 1024 / 1024 if exc.size_bytes else None
         await edit(
             status,
-            texts.too_large(size_mb, settings.max_download_mb),
+            texts.too_large(
+                size_mb, settings.max_download_mb, local_api_hint=settings.can_use_local_api
+            ),
             fallback_kb(token, effective_quality),
         )
     except TelegramEntityTooLarge:
         await edit(
             status,
-            texts.too_large(None, settings.upload_limit_mb),
+            texts.too_large(
+                None, settings.upload_limit_mb, local_api_hint=settings.can_use_local_api
+            ),
             fallback_kb(token, effective_quality),
         )
     except EmptyDownload:
@@ -396,9 +405,10 @@ async def run_ytdlp_job(
     token: str,
     mode: str,
     quality: str,
+    settings: Settings | None = None,
 ) -> bool:
     """Returns True when the job is finished (sent, or failed for good)."""
-    settings = ctx.settings
+    settings = settings or ctx.settings
     await edit(status, texts.YTDLP_WORKING)
 
     progress = ytdlp.Progress()
@@ -433,7 +443,9 @@ async def run_ytdlp_job(
         size_mb = exc.size_bytes / 1024 / 1024 if exc.size_bytes else None
         await edit(
             status,
-            texts.too_large(size_mb, settings.max_download_mb),
+            texts.too_large(
+                size_mb, settings.max_download_mb, local_api_hint=settings.can_use_local_api
+            ),
             fallback_kb(token, quality),
         )
         return True
@@ -441,7 +453,9 @@ async def run_ytdlp_job(
     except TelegramEntityTooLarge:
         await edit(
             status,
-            texts.too_large(None, settings.upload_limit_mb),
+            texts.too_large(
+                None, settings.upload_limit_mb, local_api_hint=settings.can_use_local_api
+            ),
             fallback_kb(token, quality),
         )
         return True

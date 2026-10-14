@@ -1,6 +1,8 @@
-aiogram==3.30.0
-aiohttp>=3.10,<3.15
-python-dotenv==1.2.3
+aiogram==3.31.0
+aiohttp>=3.13,<3.15
+python-dotenv==1.2.4
 # yt-dlp goes stale fast: YouTube changes and old versions stop working.
 # Rebuild the image periodically to pick up a newer one.
-yt-dlp>=2026.8.19
+# [default] brings yt-dlp-ejs (YouTube's JS challenges), [deno] the JavaScript
+# runtime it needs: without one, yt-dlp only gets a reduced set of formats.
+yt-dlp[default,deno]>=2026.8.19

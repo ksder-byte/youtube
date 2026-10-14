@@ -38,18 +38,18 @@ BUSY = "⏳ Уже качаю твой предыдущий файл. Дожди
 QUEUED = "⏳ Ставлю в очередь..."
 FETCHING = "🔎 Спрашиваю у Cobalt..."
 DOWNLOADING = "⬇️ Скачиваю..."
-YTDLP_WORKING = "⬇️ Скачиваю с YouTube "
-YTDLP_FALLBACK = "↩️Не справился, пробую через..."
+YTDLP_WORKING = "⬇️ Скачиваю с YouTube..."
+YTDLP_FALLBACK = "↩️ yt-dlp не справился, пробую через Cobalt..."
 UPLOADING = "📤 Отправляю в Telegram..."
-DONE_CAPTION = ""
 
 RETRY_LOCAL = "🔁 Сервер отдал пустой файл — собираю видео и звук сам..."
 EMPTY_FILE = (
-    "❌Бот вернул пустой файл даже после локальной сборки.\n\n"
-    "Чаще всего это значит, что протухла сессия YouTube. Попробуй ещё раз, "
-    "а если не помогло — <code>docker compose restart yt-session-generator cobalt</code>."
+    "❌ Cobalt вернул пустой файл даже после локальной сборки.\n\n"
+    "Чаще всего это значит, что у инстанса протухла сессия площадки. "
+    "Попробуй ещё раз чуть позже."
 )
 
+WORKER_RESTARTED = "❌ Загрузчик перезапустился посреди задачи. Пришли ссылку ещё раз."
 TIMEOUT = "❌ Слишком долго — источник не ответил. Попробуй ещё раз или выбери качество пониже."
 UNKNOWN_ERROR = "❌ Не получилось: {error}"
 
@@ -116,17 +116,19 @@ def cobalt_error(code: str) -> str:
     return f"❌ Cobalt вернул ошибку: <code>{code}</code>"
 
 
-def too_large(size_mb: float | None, limit_mb: int) -> str:
+def too_large(size_mb: float | None, limit_mb: int, *, local_api_hint: bool = True) -> str:
+    """`local_api_hint` is off in worker mode: a bot served by Telegram
+    Serverless cannot move to a local Bot API server."""
     if size_mb:
         head = f"⚠️ Файл весит ~{size_mb:.0f} МБ"
     else:
         head = "⚠️ Файл больше лимита"
     tail = (
-        "\n\n."
-        if limit_mb <= 50
+        "\n\nℹ️ Владелец бота может поднять лимит до 2 ГБ, подключив локальный Bot API сервер."
+        if limit_mb <= 50 and local_api_hint
         else ""
     )
     return (
-        f"{head}, а Telegram разрешает боту отправлять не больше {limit_mb} МБ.\n\n"
-        f"Попробуй качество пониже или только звук:{tail}"
+        f"{head}, а Telegram разрешает боту отправлять не больше {limit_mb} МБ.{tail}\n\n"
+        "Попробуй качество пониже или только звук:"
     )

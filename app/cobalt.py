@@ -170,7 +170,6 @@ class CobaltResult:
             return cls(
                 status=status,
                 tunnels=[t for t in data.get("tunnel", []) if t],
-                audio_url=data.get("audio"),
                 output_filename=output.get("filename"),
                 output_type=output.get("type"),
                 source=source,
@@ -268,52 +267,6 @@ class CobaltClient:
             if not isinstance(data, dict):
                 raise CobaltUnavailable(f"{endpoint.label} returned {data!r}")
             return data
-
-    async def probe(self, endpoint: Endpoint) -> Probe:
-        """Full diagnostic of one instance: never raises, explains what arrived."""
-        started = time.monotonic()
-        try:
-            async with self.session.get(
-                f"{endpoint.url}/", headers=self._headers(endpoint), timeout=self._api_timeout
-            ) as resp:
-                body = await resp.read()
-                common = {
-                    "endpoint": endpoint,
-                    "http_status": resp.status,
-                    "content_type": resp.headers.get("Content-Type"),
-                    "latency_ms": int((time.monotonic() - started) * 1000),
-                }
-                snippet = body[:200].decode("utf-8", errors="replace").strip()
-
-                try:
-                    data = json.loads(body)
-                except ValueError:
-                    return Probe(
-                        **common,
-                        snippet=snippet,
-                        error=_describe_non_json(resp.status, snippet),
-                    )
-
-                if not isinstance(data, dict) or not isinstance(data.get("cobalt"), dict):
-                    return Probe(
-                        **common,
-                        snippet=snippet,
-                        error="это JSON, но не ответ Cobalt API",
-                    )
-
-                info = data["cobalt"]
-                return Probe(
-                    **common,
-                    version=info.get("version"),
-                    services=list(info.get("services") or []),
-                    info=data,
-                )
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
-            return Probe(endpoint=endpoint, error=f"{type(exc).__name__}: {exc}")
-
-    async def survey(self) -> list[Probe]:
-        """Probes every configured instance; used by /status."""
-        return list(await asyncio.gather(*(self.probe(e) for e in self.endpoints)))
 
     async def probe(self, endpoint: Endpoint) -> Probe:
         """Full diagnostic of one instance: never raises, explains what arrived."""
