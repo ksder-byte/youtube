@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Загрузчик</title>
+  <!-- Must come before any other script: it sets up Telegram.WebApp. -->
+  <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app" id="app" aria-busy="true">
+    <header class="top">
+      <div class="brand">
+        <img src="icon.svg" alt="" width="36" height="36">
+        <div>
+          <h1>Загрузчик</h1>
+          <p class="subtitle">Видео и звук по ссылке</p>
+        </div>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Разделы">
+        <button role="tab" id="tab-btn-download" aria-controls="tab-download" aria-selected="true" data-tab="download">Скачать</button>
+        <button role="tab" id="tab-btn-history" aria-controls="tab-history" aria-selected="false" data-tab="history">История</button>
+        <button role="tab" id="tab-btn-settings" aria-controls="tab-settings" aria-selected="false" data-tab="settings">Настройки</button>
+      </nav>
+    </header>
+
+    <div class="notice" id="outside" hidden>
+      Откройте это приложение из Telegram — через бота.
+    </div>
+
+    <section class="gate" id="gate" hidden>
+      <div class="gate-icon" aria-hidden="true">🔒</div>
+      <h2>Нужна подписка</h2>
+      <p>Чтобы скачивать, подпишитесь на канал и вернитесь сюда.</p>
+      <div class="stack">
+        <button class="btn primary" id="gate-open">Открыть канал</button>
+        <button class="btn" id="gate-check">Я подписался</button>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-download" role="tabpanel" aria-labelledby="tab-btn-download">
+      <form class="card" id="form" autocomplete="off" novalidate>
+        <label class="label" for="url">Ссылка</label>
+        <div class="field">
+          <input id="url" name="url" type="url" inputmode="url" enterkeyhint="go" spellcheck="false"
+                 placeholder="https://youtu.be/…" aria-describedby="url-hint">
+          <button type="button" class="field-btn" id="paste" hidden>Вставить</button>
+          <button type="button" class="field-btn icon" id="clear" aria-label="Очистить" hidden>✕</button>
+        </div>
+        <p class="hint" id="url-hint">YouTube, TikTok, Instagram, X, VK, Reddit, SoundCloud и другие</p>
+
+        <div class="segmented" role="radiogroup" aria-label="Что скачать">
+          <button type="button" role="radio" aria-checked="true" data-mode="v">🎬 Видео</button>
+          <button type="button" role="radio" aria-checked="false" data-mode="a">🎵 Звук</button>
+        </div>
+
+        <div id="quality-block">
+          <span class="label" id="quality-label">Качество</span>
+          <div class="chips" id="quality" role="radiogroup" aria-labelledby="quality-label"></div>
+        </div>
+
+        <button type="submit" class="btn primary wide" id="go">Получить</button>
+      </form>
+
+      <div id="result" aria-live="polite"></div>
+    </section>
+
+    <section class="tab" id="tab-history" role="tabpanel" aria-labelledby="tab-btn-history" hidden>
+      <div class="section-head">
+        <h2>Недавние</h2>
+        <button class="btn text danger" id="clear-history" hidden>Очистить</button>
+      </div>
+      <ul class="list" id="history"></ul>
+      <p class="empty" id="history-empty" hidden>Здесь появятся ваши загрузки.</p>
+    </section>
+
+    <section class="tab" id="tab-settings" role="tabpanel" aria-labelledby="tab-btn-settings" hidden>
+      <p class="hint lead">Эти значения бот использует и для кнопок под ссылкой в чате.</p>
+      <div class="card settings">
+        <div class="setting">
+          <span class="label" id="set-quality-label">Качество видео</span>
+          <div class="chips" data-setting="videoQuality" role="radiogroup" aria-labelledby="set-quality-label"></div>
+        </div>
+        <div class="setting">
+          <span class="label" id="set-format-label">Формат звука</span>
+          <div class="chips" data-setting="audioFormat" role="radiogroup" aria-labelledby="set-format-label"></div>
+        </div>
+        <div class="setting">
+          <span class="label" id="set-bitrate-label">Битрейт звука, кбит/с</span>
+          <div class="chips" data-setting="audioBitrate" role="radiogroup" aria-labelledby="set-bitrate-label"></div>
+        </div>
+        <div class="setting">
+          <span class="label" id="set-codec-label">Кодек YouTube</span>
+          <div class="chips" data-setting="codec" role="radiogroup" aria-labelledby="set-codec-label"></div>
+          <p class="hint">h264 играет везде, av1 и vp9 легче, но капризнее.</p>
+        </div>
+      </div>
+      <p class="hint" id="limits"></p>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

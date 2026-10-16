@@ -11,7 +11,8 @@
     "migrate": "tgcloud migrate",
     "run": "tgcloud run",
     "check": "node scripts/check-secrets.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --import ./test/register.mjs --test \"test/**/*.test.mjs\""
+    "test": "node --disable-warning=ExperimentalWarning --import ./test/register.mjs --test \"test/**/*.test.mjs\"",
+    "preview": "node --disable-warning=ExperimentalWarning --import ./test/register.mjs test/preview/server.mjs"
   },
   "devDependencies": {
     "@tgcloud/cli": "^0.2.0"
