@@ -111,6 +111,11 @@ Cobalt наружу пускает только с ключом из `cobalt/key
 
 ### 2. Проект Serverless
 
+> Все команды ниже — **из папки `serverless`**. В другой папке `npx tgcloud`
+> не найдёт CLI проекта и скачает с npm посторонний пакет с тем же именем
+> (`tgcloud`, не от Telegram). Поэтому дальше везде `npm run …`: эти команды
+> всегда берут CLI проекта.
+
 В @BotFather: ваш бот → **Serverless** → включить; там же **CLI Access** →
 скопировать токен доступа (это не токен бота).
 
@@ -141,7 +146,7 @@ export default {
 
 ```bash
 npm run deploy        # проверит secrets.js и зальёт код + Mini App; напечатает адрес Mini App
-npx tgcloud migrate   # создаст таблицы в базе (спросит подтверждение)
+npm run migrate       # создаст таблицы в базе (спросит подтверждение)
 ```
 
 Впишите напечатанный адрес `https://app<id>.tgcloud.ai/` в `MINI_APP_URL`,
@@ -154,7 +159,7 @@ npx tgcloud migrate   # создаст таблицы в базе (спроси�
 ### Обновление и отладка
 
 - код поменялся → `npm run deploy`; поменялась `tgcloud/schema.js` → ещё и
-  `npx tgcloud migrate`;
+  `npm run migrate`;
 - `npx tgcloud run handlers/message '{ chat: { id: 1, type: "private" }, from: { id: 1 }, text: "/help" }'`
   выполнит обработчик в облаке на ваших локальных файлах, без деплоя;
 - `npx tgcloud webhook` — состояние вебхука; `npx tgcloud webhook sync` чинит
