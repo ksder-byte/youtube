@@ -65,6 +65,13 @@ test('an instance-specific refusal moves on; the last one is reported', async ()
   assert.ok((await unhealthyInstances()).has(a.base), 'auth errors cool the instance down');
 });
 
+test('a rate limit on a public instance is reported as such', async () => {
+  const limited = await cobalt((res) => json(res, 429, { status: 'error', error: { code: 'error.api.rate_exceeded', context: { limit: 60 } } }));
+  await fresh({ COBALT_INSTANCES: [limited.base] });
+  await assert.rejects(processUrl('https://tiktok.com/@a/video/1'), (e) => e instanceof CobaltError && e.code === 'error.api.rate_exceeded');
+  assert.equal(limited.hits.length, 1, 'no hammering a rate-limited instance');
+});
+
 test('nothing answers: CobaltUnavailable', async () => {
   const html = await cobalt((res) => res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html>'));
   await fresh({ COBALT_INSTANCES: [html.base, 'http://127.0.0.1:9'] });

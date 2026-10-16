@@ -175,6 +175,10 @@ export async function processUrl(url, opts = {}, instances = config.cobaltInstan
       if (httpStatus === 429 || httpStatus >= 500) {
         transport.push(`${instance.label}: HTTP ${httpStatus}`);
         await mark(instance, COOLDOWN, `HTTP ${httpStatus}`);
+        // Keep the reason (error.api.rate_exceeded on a public instance): it
+        // tells the user to wait, where "Cobalt is unavailable" would not.
+        const code = data.status === STATUS.ERROR ? data.error?.code : null;
+        if (code && !last) last = new CobaltError(code, data.error?.context);
         break;
       }
 
