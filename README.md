@@ -505,6 +505,7 @@ Cookies дают доступ ровно к тому, что видит ваш �
 | Бот молчит на ссылку | включена обязательная подписка; посмотрите логи бота |
 | `The bot already has a webhook: …tgcloud…` при старте контейнера | бот живёт в Serverless, а контейнер запущен в режиме polling. Нужен `BOT_MODE=worker` (через `docker-compose.public.yml`) |
 | Бот в Serverless молчит | `npx tgcloud webhook`: вебхук должен быть «In sync». Если нет — `npx tgcloud webhook sync`. Проверьте, что старый polling-контейнер остановлен |
+| `/status`: `❌ … fetch: request failed` | облако Telegram не достучалось до адреса. Отправьте боту **/diag** (только для `ADMIN_IDS`): он проверит из облака api.telegram.org, example.com, Cloudflare и ваши инстансы и покажет причину ошибки. Если не открывается только инстанс — его хостинг или Cloudflare не пускают адреса Telegram, возьмите другой |
 | `❌ Загрузчик недоступен` | `curl https://<PUBLIC_DOMAIN>/worker/healthz`; `WORKER_URL` в `secrets.js` должен оканчиваться на `/worker`, `WORKER_SECRET` — совпадать с `.env` |
 | `⚙️ Бот ещё не настроен` | в `tgcloud/lib/secrets.js` пусто — `npm run check` подскажет, чего не хватает |
 | Нет кнопок Mini App | не заполнен `MINI_APP_URL` в `secrets.js`; кнопки Mini App показываются только в личных чатах |

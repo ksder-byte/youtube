@@ -70,6 +70,13 @@ export function buildConfig(s = {}) {
     alwaysProxy: flag(s.ALWAYS_PROXY, true),
     inlineLimitMb: Number.isFinite(inline) && inline > 0 ? Math.min(inline, FETCH_CAP_MB) : FETCH_CAP_MB,
     apiTimeoutMs: 45_000,
+    // What /diag checks besides the Cobalt instances: tells "this host is
+    // unreachable from Telegram's cloud" apart from "outbound HTTP is broken".
+    diagUrls: [
+      'https://api.telegram.org/',
+      'https://example.com/',
+      'https://www.cloudflare.com/cdn-cgi/trace',
+    ],
   };
 }
 

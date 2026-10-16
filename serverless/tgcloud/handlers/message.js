@@ -15,6 +15,7 @@ const COMMAND_HANDLERS = {
   status: commands.status,
   app: commands.app,
   setup: commands.setup,
+  diag: commands.diag,
 };
 
 export default async function (message) {

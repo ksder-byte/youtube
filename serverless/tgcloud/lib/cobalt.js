@@ -3,7 +3,7 @@
 import { fetch } from 'sdk';
 import { config } from './config.js';
 import { markInstance, unhealthyInstances } from './store.js';
-import { sleep, withTimeout } from './util.js';
+import { describeError, sleep, withTimeout } from './util.js';
 
 export const STATUS = {
   ERROR: 'error',
@@ -165,9 +165,10 @@ export async function processUrl(url, opts = {}, instances = config.cobaltInstan
       try {
         ({ data, httpStatus } = await post(instance, payload));
       } catch (e) {
-        transport.push(`${instance.label}: ${e.message}`);
-        console.warn(`${instance.label} did not answer (${attempt}/${attempts}): ${e.message}`);
-        await mark(instance, COOLDOWN, e.message);
+        const reason = describeError(e);
+        transport.push(`${instance.label}: ${reason}`);
+        console.warn(`${instance.label} did not answer (${attempt}/${attempts}): ${reason}`);
+        await mark(instance, COOLDOWN, reason);
         if (attempt < attempts) await sleep(1000);
         continue;
       }
@@ -213,7 +214,8 @@ export async function processUrl(url, opts = {}, instances = config.cobaltInstan
 export async function probe(instance) {
   const started = Date.now();
   try {
-    const res = await withTimeout(fetch(`${instance.url}/`, { headers: headers(instance) }), 15_000);
+    const { 'Content-Type': _, ...get } = headers(instance);
+    const res = await withTimeout(fetch(`${instance.url}/`, { headers: get }), 15_000);
     const body = await res.text();
     const latencyMs = Date.now() - started;
     let data;
@@ -233,7 +235,7 @@ export async function probe(instance) {
     const services = Array.isArray(info.services) ? info.services : [];
     return { instance, ok: true, version: info.version ?? '?', services, youtube: services.includes('youtube'), latencyMs };
   } catch (e) {
-    return { instance, ok: false, error: e.message };
+    return { instance, ok: false, error: describeError(e) };
   }
 }
 

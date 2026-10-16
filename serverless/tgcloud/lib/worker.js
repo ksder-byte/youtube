@@ -6,7 +6,7 @@
 
 import { fetch } from 'sdk';
 import { config } from './config.js';
-import { withTimeout } from './util.js';
+import { describeError, withTimeout } from './util.js';
 
 export function workerEnabled() {
   return config.worker;
@@ -50,8 +50,8 @@ export async function submitJob({ chatId, messageId, userId, url, mode, quality,
       20_000,
     );
   } catch (e) {
-    console.error(`worker unreachable: ${e.message}`);
-    return { ok: false, reason: 'unreachable', detail: e.message };
+    console.error(`worker unreachable: ${describeError(e)}`);
+    return { ok: false, reason: 'unreachable', detail: describeError(e) };
   }
   if (res.status === 202) return { ok: true };
   const detail = (await res.text().catch(() => '')).slice(0, 200);
@@ -69,6 +69,6 @@ export async function workerHealth() {
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     return await res.json();
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: describeError(e) };
   }
 }

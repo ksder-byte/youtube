@@ -76,6 +76,20 @@ export function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+/** The most specific description of an error: message, then cause and code if any. */
+export function describeError(e) {
+  if (!e) return 'unknown error';
+  let text = e.message || String(e);
+  const cause = e.cause;
+  if (cause) {
+    const inner = cause.message || String(cause);
+    if (inner && !text.includes(inner)) text += ` (${inner})`;
+    if (cause.code && !text.includes(cause.code)) text += ` [${cause.code}]`;
+  }
+  if (e.code && typeof e.code === 'string' && !text.includes(e.code)) text += ` [${e.code}]`;
+  return text;
+}
+
 export function mb(bytes) {
   return bytes / 1024 / 1024;
 }

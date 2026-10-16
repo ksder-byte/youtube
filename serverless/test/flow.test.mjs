@@ -5,6 +5,7 @@ import { afterEach, beforeEach, test } from 'node:test';
 
 import callbackQuery from '../tgcloud/handlers/callback_query.js';
 import message from '../tgcloud/handlers/message.js';
+import { config } from '../tgcloud/lib/config.js';
 import { acquireJob, getLink, getPrefs, listHistory } from '../tgcloud/lib/store.js';
 import * as texts from '../tgcloud/lib/texts.js';
 import { BotApiError, bytes, calls, callsOf, file, fresh, json, onApi, privateMessage, serve, user } from './helpers.mjs';
@@ -303,4 +304,18 @@ test('/setup is for admins only', async () => {
   await message({ ...privateMessage('/setup'), from: { ...user, id: 1 } });
   assert.equal(callsOf('setMyCommands')[0].commands.length, 5);
   assert.equal(callsOf('setChatMenuButton')[0].menu_button.web_app.url, 'https://app1.tgcloud.ai/');
+});
+
+test('/diag shows what Telegram\'s cloud can reach, with the real error', async () => {
+  await message({ ...privateMessage('/diag'), from: { ...user, id: 5 } });
+  assert.equal(callsOf('sendMessage')[0].text, texts.ADMIN_ONLY);
+
+  const trace = await serve({ '/cdn-cgi/trace': (req, res) => res.writeHead(200, { Server: 'cloudflare' }).end('ip=203.0.113.7\nloc=NL\nhttp=http/2\ntls=TLSv1.3\n') });
+  servers.push(trace);
+  config.diagUrls = [`${trace.base}/cdn-cgi/trace`, 'http://127.0.0.1:9/'];
+  await message({ ...privateMessage('/diag'), from: { ...user, id: 1 } });
+  const text = callsOf('sendMessage').at(-1).text;
+  assert.match(text, /ip=203\.0\.113\.7 loc=NL http=http\/2 tls=TLSv1\.3/);
+  assert.match(text, /❌ <code>127\.0\.0\.1:9\/<\/code>\n {3}fetch failed \(.+\)/, "the cause is shown, not just \"fetch failed\"");
+  assert.match(text, /Cobalt v11\.7\.1/);
 });

@@ -1,13 +1,13 @@
 // Bot commands: /start /help /status /settings /app /setup.
 
-import { api } from 'sdk';
+import { api, fetch } from 'sdk';
 import { survey } from './cobalt.js';
 import { config } from './config.js';
 import { appButton, settingsKb } from './keyboards.js';
 import { getPrefs } from './store.js';
 import { say } from './telegram.js';
 import * as texts from './texts.js';
-import { escapeHtml } from './util.js';
+import { describeError, escapeHtml, withTimeout } from './util.js';
 import { workerHealth } from './worker.js';
 
 export const COMMANDS = [
@@ -102,4 +102,63 @@ export async function setup(message) {
     menu = ' и кнопка меню ведёт в Mini App';
   }
   await say(message.chat.id, texts.SETUP_DONE.replace('{menu}', menu));
+}
+
+async function probeUrl(target) {
+  const started = Date.now();
+  try {
+    const res = await withTimeout(
+      fetch(target.url, { headers: { 'User-Agent': 'cobalt-telegram-bot/2.0 (diag)', ...target.headers } }),
+      15_000,
+    );
+    const body = await res.text();
+    return { ...target, ok: true, status: res.status, ms: Date.now() - started, server: res.headers.get('server'), body };
+  } catch (e) {
+    // The whole error, cause included, for `npx tgcloud run`.
+    console.error(`diag: ${target.url}`, e);
+    return { ...target, ok: false, ms: Date.now() - started, error: describeError(e) };
+  }
+}
+
+function diagDetails(r) {
+  // Cloudflare's trace says which address and protocol the platform used.
+  if (r.url.endsWith('/cdn-cgi/trace')) {
+    const fields = Object.fromEntries(r.body.split('\n').map((l) => l.split('=')).filter((kv) => kv.length === 2));
+    return ['ip', 'loc', 'http', 'tls'].filter((k) => fields[k]).map((k) => `${k}=${fields[k]}`).join(' ');
+  }
+  if (r.cobalt) {
+    try {
+      const info = JSON.parse(r.body).cobalt;
+      return info ? `Cobalt v${info.version}` : 'не Cobalt API';
+    } catch {
+      return /just a moment|cloudflare/i.test(r.body) ? 'проверка браузера Cloudflare' : 'ответ не JSON';
+    }
+  }
+  return '';
+}
+
+/** Checks outbound HTTP from Telegram's cloud. Admins only. */
+export async function diag(message) {
+  if (!config.adminIds.includes(message.from.id)) return say(message.chat.id, texts.ADMIN_ONLY);
+  const targets = [
+    ...config.diagUrls.map((url) => ({ url, label: url.replace(/^https?:\/\//, '') })),
+    ...config.cobaltInstances.map((i) => ({
+      url: `${i.url}/`,
+      label: `Cobalt ${i.label}`,
+      cobalt: true,
+      headers: { Accept: 'application/json', ...(i.apiKey ? { Authorization: `Api-Key ${i.apiKey}` } : {}) },
+    })),
+  ];
+  const results = await Promise.all(targets.map(probeUrl));
+  const lines = ['<b>Запросы из облака Telegram</b>'];
+  for (const r of results) {
+    const head = `${r.ok ? '✅' : '❌'} <code>${escapeHtml(r.label)}</code>`;
+    if (!r.ok) {
+      lines.push(`${head}\n   ${escapeHtml(r.error)} · ${r.ms} мс`);
+      continue;
+    }
+    const extra = [`HTTP ${r.status}`, `${r.ms} мс`, r.server, diagDetails(r)].filter(Boolean).join(' · ');
+    lines.push(`${head}\n   ${escapeHtml(extra)}`);
+  }
+  await say(message.chat.id, lines.join('\n'));
 }

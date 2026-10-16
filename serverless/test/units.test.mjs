@@ -6,7 +6,7 @@ import { kindOf, nameFromHeaders, safeFilename } from '../tgcloud/lib/download.j
 import { packDownload, unpackDownload, fallbackKb, actionsKb } from '../tgcloud/lib/keyboards.js';
 import { cleanUrl, extractUrl, isYoutube } from '../tgcloud/lib/links.js';
 import { audioTags } from '../tgcloud/lib/send.js';
-import { parseUrl, randomToken } from '../tgcloud/lib/util.js';
+import { describeError, parseUrl, randomToken } from '../tgcloud/lib/util.js';
 import { cobaltError, tooLarge } from '../tgcloud/lib/texts.js';
 import { fresh } from './helpers.mjs';
 
@@ -153,4 +153,11 @@ test('tgcloud/ modules only import what the platform resolves', async () => {
     }
     assert.doesNotMatch(source, /\bBuffer\b|\bprocess\.|require\(/, `${relative(root, file)} uses a Node-only API`);
   }
+});
+
+test('describeError keeps the cause and code a bare message hides', () => {
+  const inner = Object.assign(new Error('getaddrinfo ENOTFOUND x.example'), { code: 'ENOTFOUND' });
+  assert.equal(describeError(new Error('fetch failed', { cause: inner })), 'fetch failed (getaddrinfo ENOTFOUND x.example)');
+  assert.equal(describeError(Object.assign(new Error('request failed'), { code: 'ECONNRESET' })), 'request failed [ECONNRESET]');
+  assert.equal(describeError(null), 'unknown error');
 });
