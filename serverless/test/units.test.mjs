@@ -133,3 +133,24 @@ test('texts', () => {
   assert.match(cobaltError('error.api.<weird>'), /error\.api\.weird/);
   assert.match(tooLarge(73.4, 30), /~73 МБ.*30 МБ/s);
 });
+
+test('tgcloud/ modules only import what the platform resolves', async () => {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const { join, dirname, resolve, relative } = await import('node:path');
+  const root = resolve(import.meta.dirname, '../tgcloud');
+  const files = (await readdir(root, { recursive: true })).filter((f) => f.endsWith('.js')).map((f) => join(root, f));
+  assert.ok(files.length > 20);
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    for (const [, spec] of source.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]/gm)) {
+      const where = `${relative(root, file)}: ${spec}`;
+      if (spec.startsWith('.')) {
+        assert.ok(spec.endsWith('.js'), `${where} — relative imports need .js`);
+        assert.ok(!relative(root, resolve(dirname(file), spec)).startsWith('..'), `${where} — leaves tgcloud/`);
+      } else {
+        assert.match(spec, /^sdk(\/(db|api|fetch))?$/, `${where} — only sdk is available at runtime`);
+      }
+    }
+    assert.doesNotMatch(source, /\bBuffer\b|\bprocess\.|require\(/, `${relative(root, file)} uses a Node-only API`);
+  }
+});

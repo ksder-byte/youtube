@@ -34,7 +34,7 @@ fi
 
 [ "$1" = "public" ] || exit 0
 
-# ── public setup: worker + Cobalt behind HTTPS for Telegram Serverless ───────
+# -- public setup: worker + Cobalt behind HTTPS for Telegram Serverless -------
 new_uuid() {
     if [ -r /proc/sys/kernel/random/uuid ]; then
         cat /proc/sys/kernel/random/uuid

@@ -5,9 +5,8 @@
   "static": {
     "source": "miniapp",
     "headers": [
-      // File names are not content-hashed: make browsers revalidate, so a
-      // deploy reaches users right away.
-      { "path": "/*", "set": { "Cache-Control": "no-cache", "Referrer-Policy": "no-referrer" } }
+      // Cobalt tunnel links and thumbnails need not learn where they were opened from.
+      { "path": "/*", "set": { "Referrer-Policy": "no-referrer" } }
     ]
   }
 }

@@ -1,20 +1,38 @@
 # Cobalt Telegram Bot
 
-Телеграм-бот на **aiogram 3**, который скачивает медиа через собственный инстанс
-[Cobalt](https://github.com/imputnet/cobalt) и присылает файл прямо в чат.
-Главный сценарий — **YouTube** (включая Shorts), остальные площадки работают
-как бонус: TikTok, Instagram, X/Twitter, VK, Reddit, Twitch-клипы, SoundCloud,
-Pinterest, Bilibili и всё остальное, что умеет ваша версия Cobalt.
+Телеграм-бот, который скачивает медиа через [Cobalt](https://github.com/imputnet/cobalt)
+и yt-dlp и присылает файл прямо в чат. Главный сценарий — **YouTube** (включая
+Shorts), остальные площадки работают как бонус: TikTok, Instagram, X/Twitter,
+VK, Reddit, Twitch-клипы, SoundCloud, Pinterest, Bilibili и всё остальное, что
+умеет ваша версия Cobalt. Есть **Mini App**: вставить ссылку, выбрать качество
+и скачать файл на устройство или в чат.
+
+Запускается двумя способами:
+
+| | Telegram Serverless (новое) | Классический |
+|---|---|---|
+| Где живёт бот | у Telegram: `serverless/`, JavaScript | у вас: `app/`, aiogram, long polling |
+| Mini App | да, хостится там же | нет |
+| Ваш сервер | загрузчик (yt-dlp + ffmpeg) и Cobalt за HTTPS | всё целиком |
+| Лимит файла в чат | 30 МБ из облака, 50 МБ через загрузчик | 50 МБ, с локальным Bot API — 2 ГБ |
 
 ```
-                  ┌── YouTube ──→ yt-dlp (внутри бота, свои токены, ffmpeg рядом)
+Telegram Serverless:
+                                  ┌── YouTube, > 30 МБ, склейка ─→ загрузчик на вашем сервере ─┐
+пользователь → бот / Mini App ────┤   (BOT_MODE=worker: yt-dlp + ffmpeg)                       ├→ файл в чат
+  (код у Telegram, serverless/)   └── остальное ─→ Cobalt ─→ ≤ 30 МБ отправляет сам бот ───────┘
+                                       Mini App: «Скачать на устройство» — прямо из Cobalt, без лимита 50 МБ
+
+Классический:
+                   ┌── YouTube ──→ yt-dlp (внутри бота, ffmpeg рядом)
 пользователь → бот ┤
-                  └── остальное ─→ cobalt API
+                   └── остальное ─→ cobalt API
 ```
 
-YouTube обслуживает **yt-dlp**: он добывает токены сам, поэтому отдельный сервер
-сессий не нужен — в стеке всего два контейнера. Всё прочее идёт в Cobalt.
-Переключается переменной `YTDLP_FOR_YOUTUBE`.
+Почему не «всё в Serverless»: там работает только JavaScript в песочнице V8 —
+ни Python, ни yt-dlp, ни ffmpeg, а ответ любого внешнего запроса ограничен
+30 МБ. Поэтому бот, кнопки, настройки, история и Mini App переехали к Telegram,
+а тяжёлая работа осталась на вашем сервере — тем же Python-кодом, что и раньше.
 
 ## Что умеет
 
@@ -33,13 +51,145 @@ YouTube обслуживает **yt-dlp**: он добывает токены с
 - ♻️ ретраи и понятные сообщения на все коды ошибок Cobalt (на русском);
 - 🚦 ограничение параллельных загрузок и один активный запрос на пользователя.
 
-## Быстрый старт
+## Что нового в 2.0
+
+- **Telegram Serverless**: бот переписан на JavaScript-модули платформы
+  (`serverless/`), состояние — во встроенной базе SQLite;
+- **Mini App** (`serverless/miniapp/`): ссылка → видео или звук → скачать на
+  устройство (`WebApp.downloadFile`, без лимита Bot API) или в чат; история,
+  настройки по умолчанию, галереи;
+- **режим загрузчика** `BOT_MODE=worker`: Python-часть принимает задачи от
+  серверлесс-бота по HTTPS и сама отправляет файл в чат;
+- `docker-compose.public.yml` + Caddy: загрузчик и Cobalt (только по API-ключу)
+  на одном HTTPS-домене с автоматическим сертификатом;
+- обновлены компоненты: Python 3.14, aiogram 3.31, aiohttp 3.14, python-dotenv
+  1.2.4, pytest 9.1, pytest-asyncio 1.4; yt-dlp ставится с `[default,deno]` —
+  yt-dlp-ejs и JavaScript-рантайм deno, без которых YouTube сейчас отдаёт
+  урезанный набор форматов;
+- исправлено: дублированные методы клиента Cobalt, сломанный
+  `app/wait_for_session.py`, обрезанные тексты, `docker-compose.yml`
+  игнорировал список `COBALT_API_URL` из `.env`;
+- в режиме polling бот теперь отказывается удалять чужой вебхук — он не
+  «уведёт» бота у Serverless, если случайно запустить старый контейнер.
+
+## Деплой в Telegram Serverless
+
+Понадобится: сервер с Docker и доменом (для загрузчика и Cobalt), Node.js 22.13+
+на вашем компьютере и бот, у которого в @BotFather включён Serverless.
+
+> Остановите старый контейнер с ботом (`docker compose down`), прежде чем
+> переносить бота: у бота может быть только один способ получать апдейты, и в
+> Serverless это вебхук платформы.
+
+### 1. Сервер: загрузчик и Cobalt за HTTPS
+
+```bash
+./setup.sh public      # создаст .env и cobalt/keys.json, напечатает недостающие строки
+nano .env              # BOT_TOKEN и строки, которые напечатал скрипт
+```
+
+В `.env` должно оказаться:
+
+```env
+BOT_TOKEN=...                 # тот же бот
+COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml
+PUBLIC_DOMAIN=dl.example.com  # A/AAAA-запись домена → IP сервера
+WORKER_SECRET=...             # ≥ 32 символов, скрипт сгенерирует
+COBALT_API_KEY=...            # UUID из cobalt/keys.json
+```
+
+```bash
+docker compose build && docker compose up -d
+curl https://dl.example.com/worker/healthz        # → {"ok": true}
+```
+
+Порты 80 и 443 должны быть открыты: Caddy сам получит сертификат Let's Encrypt.
+Cobalt наружу пускает только с ключом из `cobalt/keys.json`; загрузчик — только
+с `WORKER_SECRET`. На Windows вместо `./setup.sh public` —
+`.\setup.ps1 public`.
+
+### 2. Проект Serverless
+
+В @BotFather: ваш бот → **Serverless** → включить; там же **CLI Access** →
+скопировать токен доступа (это не токен бота).
+
+```bash
+cd serverless
+npm install
+npx tgcloud init --no-git   # создаст служебную .tgcloud/, ваши файлы не трогает
+npx tgcloud login           # вставить токен из CLI Access
+npm run check               # создаст tgcloud/lib/secrets.js из шаблона
+```
+
+Заполните `tgcloud/lib/secrets.js` (в git не попадает, но деплоится вместе с
+кодом — переменных окружения у платформы нет):
+
+```js
+export default {
+  COBALT_INSTANCES: ['https://dl.example.com|<COBALT_API_KEY>'],
+  WORKER_URL: 'https://dl.example.com/worker',
+  WORKER_SECRET: '<тот же WORKER_SECRET, что в .env>',
+  REQUIRED_CHANNEL: '',          // '@channel' — обязательная подписка
+  REQUIRED_CHANNEL_URL: '',
+  ADMIN_IDS: [123456789],        // ваш Telegram id — для /setup
+  MINI_APP_URL: '',              // заполните после первого деплоя
+};
+```
+
+### 3. Деплой
+
+```bash
+npm run deploy        # проверит secrets.js и зальёт код + Mini App; напечатает адрес Mini App
+npx tgcloud migrate   # создаст таблицы в базе (спросит подтверждение)
+```
+
+Впишите напечатанный адрес `https://app<id>.tgcloud.ai/` в `MINI_APP_URL`,
+снова `npm run deploy` и отправьте боту **/setup** — он обновит список команд и
+кнопку меню, ведущую в Mini App. По желанию в @BotFather назначьте этот же
+адрес как Main Mini App.
+
+Проверка — **/status** в боте: там видны инстансы Cobalt и загрузчик.
+
+### Обновление и отладка
+
+- код поменялся → `npm run deploy`; поменялась `tgcloud/schema.js` → ещё и
+  `npx tgcloud migrate`;
+- `npx tgcloud run handlers/message '{ chat: { id: 1, type: "private" }, from: { id: 1 }, text: "/help" }'`
+  выполнит обработчик в облаке на ваших локальных файлах, без деплоя;
+- `npx tgcloud webhook` — состояние вебхука; `npx tgcloud webhook sync` чинит
+  его, если кто-то вызвал `setWebhook`/`deleteWebhook` вручную;
+- `npm test` — 64 теста серверлесс-кода на Node (SDK платформы подменён
+  заглушками, Cobalt и загрузчик — локальные серверы);
+- `npm run preview` — Mini App в обычном браузере на настоящих эндпоинтах и
+  фейковом Cobalt (или вашем: `COBALT_INSTANCES='https://…|ключ' npm run preview`).
+
+### Без своего сервера
+
+Можно и так: оставьте `WORKER_URL` пустым и укажите в `COBALT_INSTANCES`
+инстанс, который даёт вам API-ключ. Тогда всё работает из облака Telegram, но
+YouTube — только если у инстанса живая YouTube-сессия, файлы в чат — до 30 МБ,
+а склеивать дорожки нечем. Mini App при этом скачивает на устройство файлы любого
+размера.
+
+### Лимиты Serverless
+
+| Что | Сколько | Что делает бот |
+|---|---|---|
+| ответ внешнего запроса из облака | 30 МБ | больше — отдаёт загрузчику (если он есть) или предлагает качество ниже, звук и прямую ссылку |
+| отправка файла ботом | 50 МБ | больше — только «Скачать на устройство» в Mini App |
+| локальный Bot API (2 ГБ) | недоступен | он требует `logOut` из облачного API, а вебхук Serverless живёт именно там |
+| время выполнения обработчика | платформа не публикует | крупные файлы лучше отдавать загрузчику: `INLINE_LIMIT_MB` в `secrets.js` |
+
+## Классический режим: бот целиком на вашем сервере
+
+Всё как раньше — один `docker compose`, бот получает апдейты через long polling.
 
 Linux / macOS:
 
 ```bash
-git clone <этот-репозиторий>
-cd z
+git clone https://github.com/ksder-byte/youtube
+cd youtube
 ./setup.sh             # создаст .env (на Windows: .\setup.ps1)
 nano .env              # минимум — BOT_TOKEN
 
@@ -156,6 +306,11 @@ docker run --rm cobalt-telegram-bot:latest python -m app.instances --youtube htt
 | Переменная | По умолчанию | Зачем |
 |---|---|---|
 | `BOT_TOKEN` | — | **обязательно**, токен от @BotFather |
+| `BOT_MODE` | `polling` | `worker` — только загрузчик для бота в Serverless (`docker-compose.public.yml` ставит сам) |
+| `WORKER_SECRET` | — | общий секрет с `serverless/tgcloud/lib/secrets.js`, ≥ 32 символов; обязателен для `worker` |
+| `WORKER_PORT` / `WORKER_MAX_QUEUE` | `8080` / `20` | порт загрузчика и сколько задач может ждать в очереди |
+| `PUBLIC_DOMAIN` | — | домен для `docker-compose.public.yml`: Caddy, сертификат, адрес туннелей Cobalt |
+| `TAKE_OVER_WEBHOOK` | `false` | разово разрешить polling-боту снять чужой вебхук (вернуть бота из Serverless) |
 | `COBALT_API_URL` | `http://cobalt:9000` | список инстансов через запятую, по приоритету; можно `url\|ключ` |
 | `COBALT_API_KEY` | пусто | ключ по умолчанию для инстансов без собственного |
 | `REQUIRED_CHANNEL` | пусто | `@channel` или `-100…`; пусто — проверка выключена |
@@ -169,7 +324,7 @@ docker run --rm cobalt-telegram-bot:latest python -m app.instances --youtube htt
 | `YOUTUBE_VIDEO_CODEC` | `h264` | `h264` играет везде; `av1`/`vp9` легче, но капризнее |
 | `YOUTUBE_BETTER_AUDIO` | `false` | звук повышенного битрейта; требует транскода на стороне Cobalt |
 | `YTDLP_FOR_YOUTUBE` | `true` | качать YouTube через yt-dlp, а не через Cobalt |
-| `YTDLP_FALLBACK_TO_COBALT` | `true` | если yt-dlp не смог — попробовать Cobalt |
+| `YTDLP_FALLBACK_TO_COBALT` | `false` | если yt-dlp не смог — попробовать Cobalt |
 | `YTDLP_COOKIES_FILE` | пусто | файл cookies для контента, который доступен вашему аккаунту |
 | `ALWAYS_PROXY` | `true` | тянуть файл через инстанс, а не по прямой ссылке; надёжнее, но весь трафик оплачивает инстанс |
 | `MAX_CONCURRENT_DOWNLOADS` | `3` | сколько задач качается одновременно |
@@ -186,6 +341,9 @@ subscription …`, а бот продолжит работать. Так неп�
 почитать.
 
 ### Файлы больше 50 МБ
+
+> Только для классического режима: локальный Bot API несовместим с Telegram
+> Serverless. Там большие файлы скачиваются на устройство через Mini App.
 
 Облачный Bot API не даёт боту отправить файл крупнее 50 МБ. Поднять потолок до
 2 ГБ можно только одним способом — **локальным Bot API сервером**. Он в
@@ -246,7 +404,7 @@ docker compose up -d
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest                       # 93 теста, сеть не нужна: Cobalt поднимается фейковый
+pytest                       # 123 теста, сеть не нужна: Cobalt поднимается фейковый
 BOT_TOKEN=... COBALT_API_URL=http://127.0.0.1:9000 python -m app
 ```
 
@@ -254,7 +412,8 @@ BOT_TOKEN=... COBALT_API_URL=http://127.0.0.1:9000 python -m app
 
 ```
 app/
-├── __main__.py     запуск, DI, long polling
+├── __main__.py     запуск, DI, long polling или загрузчик
+├── worker.py       загрузчик: HTTP-приём задач от бота в Serverless
 ├── config.py       настройки из окружения
 ├── cobalt.py       клиент Cobalt API v11: перебор инстансов, разбор статусов
 ├── instances.py    CLI-проверка инстансов (python -m app.instances)
@@ -265,6 +424,16 @@ app/
 ├── keyboards.py    инлайн-клавиатуры и callback_data
 ├── storage.py      TTL-хранилище ссылок и антифлуд
 └── texts.py        тексты и перевод кодов ошибок Cobalt
+
+serverless/                проект Telegram Serverless (npm, tgcloud)
+├── tgcloud/
+│   ├── handlers/          message.js, callback_query.js — апдейты бота
+│   ├── endpoints/         функции, которые вызывает Mini App
+│   ├── lib/               cobalt, pipeline, store, keyboards, texts, worker…
+│   └── schema.js          таблицы базы
+├── miniapp/               Mini App: HTML/CSS/JS без сборки
+├── secrets.example.js     шаблон tgcloud/lib/secrets.js
+└── test/                  тесты на Node и превью Mini App
 ```
 
 ## Про yt-dlp
@@ -318,6 +487,12 @@ Cookies дают доступ ровно к тому, что видит ваш �
 | Файл приходит документом, а не видео | в контейнере нет ffmpeg — пересоберите образ (`docker compose build --no-cache bot`) |
 | `error.api.content.too_long` | ролик длиннее `DURATION_LIMIT` в `docker-compose.yml` |
 | Бот молчит на ссылку | включена обязательная подписка; посмотрите логи бота |
+| `The bot already has a webhook: …tgcloud…` при старте контейнера | бот живёт в Serverless, а контейнер запущен в режиме polling. Нужен `BOT_MODE=worker` (через `docker-compose.public.yml`) |
+| Бот в Serverless молчит | `npx tgcloud webhook`: вебхук должен быть «In sync». Если нет — `npx tgcloud webhook sync`. Проверьте, что старый polling-контейнер остановлен |
+| `❌ Загрузчик недоступен` | `curl https://<PUBLIC_DOMAIN>/worker/healthz`; `WORKER_URL` в `secrets.js` должен оканчиваться на `/worker`, `WORKER_SECRET` — совпадать с `.env` |
+| `⚙️ Бот ещё не настроен` | в `tgcloud/lib/secrets.js` пусто — `npm run check` подскажет, чего не хватает |
+| Нет кнопок Mini App | не заполнен `MINI_APP_URL` в `secrets.js`; кнопки Mini App показываются только в личных чатах |
+| Mini App: «Сначала открой чат с ботом» | пользователь ни разу не нажимал «Старт» у бота; Mini App попросит разрешение писать ему и повторит |
 
 ## Правовая часть
 
