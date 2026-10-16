@@ -111,6 +111,9 @@ class Settings:
     worker_host: str = "0.0.0.0"
     worker_port: int = 8080
     worker_max_queue: int = 20
+    # pull mode: the Mini App address of the bot on Telegram Serverless.
+    worker_pull_url: str | None = None
+    worker_poll_seconds: float = 3.0
 
     @property
     def is_worker(self) -> bool:
@@ -162,6 +165,11 @@ def load_settings() -> Settings:
 
     bot_mode = _choice("BOT_MODE", "polling", BOT_MODES)
     worker_secret = _env("WORKER_SECRET")
+    worker_pull_url = (_env("WORKER_SERVERLESS_URL") or "").rstrip("/") or None
+    if worker_pull_url and urlparse(worker_pull_url).scheme != "https":
+        raise RuntimeError(
+            "WORKER_SERVERLESS_URL must be the bot's Mini App address, https://app<id>.tgcloud.ai"
+        )
     telegram_api_url = (_env("TELEGRAM_API_URL") or "").rstrip("/") or None
     if bot_mode == "worker":
         if not worker_secret or len(worker_secret) < 32:
@@ -204,4 +212,6 @@ def load_settings() -> Settings:
         worker_host=_env("WORKER_HOST") or "0.0.0.0",
         worker_port=_int("WORKER_PORT", 8080),
         worker_max_queue=max(1, _int("WORKER_MAX_QUEUE", 20)),
+        worker_pull_url=worker_pull_url,
+        worker_poll_seconds=max(1, _int("WORKER_POLL_SECONDS", 3)),
     )

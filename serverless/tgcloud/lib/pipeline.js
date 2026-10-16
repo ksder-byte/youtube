@@ -86,7 +86,9 @@ async function handOff(ctx, note) {
     await updateHistory(ctx.historyId, { status: 'worker' });
     return { status: 'worker' };
   }
-  const text = { busy: texts.WORKER_BUSY, overloaded: texts.WORKER_OVERLOADED }[result.reason] ?? texts.WORKER_UNAVAILABLE;
+  const text =
+    { busy: texts.WORKER_BUSY, overloaded: texts.WORKER_OVERLOADED, offline: texts.WORKER_OFFLINE }[result.reason] ??
+    texts.WORKER_UNAVAILABLE;
   return fail(ctx, text, `worker: ${result.reason} ${result.detail ?? ''}`.trim());
 }
 

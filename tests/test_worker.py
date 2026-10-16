@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
+import hashlib
+import hmac as hmac_mod
+import json
 from typing import Any
+from urllib.parse import parse_qsl
 
+import aiohttp
 import pytest
+from aiohttp import web as aioweb
 from aiohttp.test_utils import TestClient, TestServer
 
 from app.cobalt import CobaltClient, Endpoint
 from app.config import Settings
 from app.context import Context
-from app.worker import BadJob, StatusMessage, Worker, parse_job
+from app.worker import BadJob, PollRefused, Poller, StatusMessage, Worker, parse_job, sign_init_data
 
 SECRET = "s" * 40
 AUTH = {"Authorization": f"Bearer {SECRET}"}
@@ -304,3 +312,147 @@ async def test_polling_refuses_to_delete_someone_elses_webhook(monkeypatch):
 
     monkeypatch.setenv("TAKE_OVER_WEBHOOK", "true")
     await guard_webhook(WebhookBot("https://app1.tgcloud.ai/hook"))
+
+
+# --------------------------------------------------------------------------- #
+# pull mode: the worker polls the bot on Telegram Serverless
+# --------------------------------------------------------------------------- #
+
+BOT_TOKEN = "123456:ABC-test-token"
+
+
+def verify_init_data(init_data: str, bot_token: str) -> dict:
+    """Telegram's own check, written out independently of the code under test."""
+    fields = dict(parse_qsl(init_data, keep_blank_values=True))
+    received = fields.pop("hash")
+    check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret = hmac_mod.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    expected = hmac_mod.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    assert hmac_mod.compare_digest(received, expected), "bad signature"
+    return fields
+
+
+def test_signed_init_data_passes_telegrams_check():
+    fields = verify_init_data(sign_init_data(BOT_TOKEN, 777, now=1_700_000_000), BOT_TOKEN)
+    assert fields["auth_date"] == "1700000000"
+    assert json.loads(fields["user"])["id"] == 777
+    with pytest.raises(AssertionError):
+        verify_init_data(sign_init_data(BOT_TOKEN, 777), "999:other-bot")
+
+
+class FakeServerless:
+    """The bot's workerPoll endpoint: checks the init data like the platform does."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.jobs: list[dict] = []
+        self.reply: tuple[int, dict] | None = None
+
+    async def handle(self, request: aioweb.Request) -> aioweb.Response:
+        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+        assert scheme == "TMA"
+        try:
+            verify_init_data(base64.b64decode(token).decode(), BOT_TOKEN)
+        except AssertionError:
+            return aioweb.json_response({"ok": False, "error_type": "UNAUTHORIZED", "description": "bad init data"}, status=401)
+        body = await request.json()
+        self.calls.append(body)
+        if self.reply:
+            return aioweb.json_response(self.reply[1], status=self.reply[0])
+        if body["secret"] != SECRET:
+            return aioweb.json_response(
+                {"ok": False, "error_type": "ENDPOINT_ERROR", "description": "Wrong WORKER_SECRET", "parameters": {"code": "FORBIDDEN"}},
+                status=400,
+            )
+        jobs, self.jobs = self.jobs[: body["max"]], self.jobs[body["max"]:]
+        return aioweb.json_response({"ok": True, "result": {"jobs": jobs, "pollAfter": 0 if jobs else 3}})
+
+
+@pytest.fixture
+async def pull_setup():
+    fake = FakeServerless()
+    app = aioweb.Application()
+    app.router.add_post("/api/workerPoll", fake.handle)
+    server = TestServer(app)
+    await server.start_server()
+
+    settings = make_settings(bot_token=BOT_TOKEN, worker_pull_url=str(server.make_url("")).rstrip("/"))
+    ctx = Context(settings=settings, cobalt=CobaltClient(list(settings.cobalt_endpoints)))
+    recorder = Recorder()
+    worker = Worker(FakeBot(), ctx, runner=recorder)  # type: ignore[arg-type]
+    poller = Poller(worker, settings.worker_pull_url, bot_id=999)
+    session = aiohttp.ClientSession()
+    try:
+        yield fake, poller, recorder, session
+    finally:
+        await session.close()
+        await server.close()
+
+
+async def test_poller_runs_queued_jobs_and_reports_them_done(pull_setup):
+    fake, poller, recorder, session = pull_setup
+    fake.jobs = [{"id": 11, "job": job_payload(message_id=70)}]
+
+    assert await poller.poll_once(session) == 0
+    await settle(poller.worker)
+    [call] = recorder.calls
+    assert call["status"].message_id == 70 and call["quality"] == "720"
+    assert fake.calls[0]["info"]["version"] == "2.0.0"
+
+    assert await poller.poll_once(session) == 3
+    assert fake.calls[1]["done"] == [11]
+    assert await poller.poll_once(session) == 3
+    assert fake.calls[2]["done"] == [], "reported once"
+
+
+async def test_poller_takes_no_more_than_it_has_room_for(pull_setup):
+    fake, poller, recorder, session = pull_setup
+    recorder.gate.clear()
+    fake.jobs = [{"id": i, "job": job_payload(user_id=100 + i)} for i in range(30)]
+    while fake.jobs and len(poller.worker.tasks) < poller.settings.worker_max_queue:
+        await poller.poll_once(session)
+    assert len(poller.worker.tasks) == poller.settings.worker_max_queue
+    await poller.poll_once(session)
+    assert fake.calls[-1]["max"] == 0
+
+
+async def test_poller_explains_what_to_fix(pull_setup):
+    fake, poller, recorder, session = pull_setup
+    poller.settings = dataclasses.replace(poller.settings, worker_secret="x" * 40)
+    with pytest.raises(PollRefused, match="WORKER_SECRET differs"):
+        await poller.poll_once(session)
+
+    poller.settings = dataclasses.replace(poller.settings, bot_token="999:other-bot", worker_secret=SECRET)
+    with pytest.raises(PollRefused, match="BOT_TOKEN"):
+        await poller.poll_once(session)
+
+    poller.settings = dataclasses.replace(poller.settings, bot_token=BOT_TOKEN)
+    fake.reply = (200, {"html": True})
+    with pytest.raises(PollRefused, match="workerPoll failed"):
+        await poller.poll_once(session)
+
+
+async def test_finished_jobs_survive_a_failed_poll(pull_setup):
+    fake, poller, recorder, session = pull_setup
+    poller.finished = [5, 6]
+    fake.reply = (500, {"ok": False, "error_type": "INTERNAL", "description": "Internal error"})
+    with pytest.raises(PollRefused):
+        await poller.poll_once(session)
+    assert poller.finished == [5, 6]
+    fake.reply = None
+    await poller.poll_once(session)
+    assert fake.calls[-1]["done"] == [5, 6]
+
+
+def test_pull_url_must_be_https(monkeypatch):
+    from app.config import load_settings
+
+    monkeypatch.setenv("BOT_TOKEN", "1:t")
+    monkeypatch.setenv("BOT_MODE", "worker")
+    monkeypatch.setenv("WORKER_SECRET", SECRET)
+    monkeypatch.delenv("TELEGRAM_API_URL", raising=False)
+    monkeypatch.setenv("WORKER_SERVERLESS_URL", "http://app1.tgcloud.ai")
+    with pytest.raises(RuntimeError, match="WORKER_SERVERLESS_URL"):
+        load_settings()
+    monkeypatch.setenv("WORKER_SERVERLESS_URL", "https://app1.tgcloud.ai/")
+    assert load_settings().worker_pull_url == "https://app1.tgcloud.ai"

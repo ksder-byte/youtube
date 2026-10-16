@@ -38,6 +38,13 @@ export async function app(message) {
   await say(message.chat.id, texts.OPEN_APP, { reply_markup: { inline_keyboard: [[button]] } });
 }
 
+function formatAgo(seconds) {
+  if (seconds < 120) return `${seconds} с`;
+  if (seconds < 7200) return `${Math.round(seconds / 60)} мин`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)} ч`;
+  return `${Math.round(seconds / 86400)} дн`;
+}
+
 export function settingsText(prefs) {
   return texts.SETTINGS.replace('{quality}', prefs.videoQuality === 'max' ? 'максимум' : `${prefs.videoQuality}p`).replace(
     '{format}',
@@ -71,8 +78,14 @@ export async function status(message) {
 
   if (config.worker) {
     const health = await workerHealth();
-    lines.push('', '<b>Загрузчик</b>');
-    if (!health.ok) lines.push(`❌ недоступен: ${escapeHtml(health.error ?? 'нет ответа')}`);
+    lines.push('', `<b>Загрузчик</b>${health.pull ? ' (на вашем ПК, сам забирает задачи)' : ''}`);
+    if (health.pull && !health.ok) {
+      lines.push(
+        health.lastSeenAgo === null
+          ? '💤 ещё ни разу не выходил на связь: запустите его (BOT_MODE=worker, WORKER_SERVERLESS_URL)'
+          : `💤 не в сети: последний раз ${formatAgo(health.lastSeenAgo)} назад`,
+      );
+    } else if (!health.ok) lines.push(`❌ недоступен: ${escapeHtml(health.error ?? 'нет ответа')}`);
     else
       lines.push(
         `✅ на связи, yt-dlp ${escapeHtml(health.ytdlp ?? '?')}, задач: ${health.jobs ?? 0}/${health.max_queue ?? '?'}` +

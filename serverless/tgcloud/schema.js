@@ -56,3 +56,23 @@ export const instanceHealth = table('instance_health', {
   unhealthyUntil: integer('unhealthy_until').notNull().default(0),
   lastError:      text('last_error'),
 });
+
+// pull mode: jobs waiting for the worker on your PC, which polls endpoints/workerPoll.
+export const workerQueue = table('worker_queue', {
+  id:        integer('id').primaryKey({ autoIncrement: true }),
+  userId:    integer('user_id').notNull(),
+  job:       text('job').notNull(),                     // JSON, as app/worker.py parses it
+  status:    text('status').notNull().default('queued'), // queued | taken
+  createdAt: integer('created_at').notNull(),
+  takenAt:   integer('taken_at'),
+}, (t) => ({
+  statusIdx: index('idx_worker_queue_status').on(t.status, t.id),
+  userIdx:   index('idx_worker_queue_user').on(t.userId),
+}));
+
+// Small key/value facts, such as when the worker last polled.
+export const workerState = table('worker_state', {
+  key:       text('key').primaryKey(),
+  value:     text('value'),
+  updatedAt: integer('updated_at').notNull(),
+});

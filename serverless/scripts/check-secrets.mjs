@@ -38,14 +38,22 @@ for (const item of cobalt) {
   }
 }
 
-const worker = Boolean(s.WORKER_URL);
-if (worker) {
+const secret = String(s.WORKER_SECRET ?? '');
+const pull = s.WORKER_MODE === 'pull' || (!s.WORKER_URL && secret.length > 0 && s.WORKER_MODE !== 'push');
+const worker = Boolean(s.WORKER_URL) || pull;
+if (worker && secret.length < 32) problems.push('WORKER_SECRET must be at least 32 characters, the same as in the worker\'s .env');
+if (s.WORKER_URL && !pull) {
   if (!isHttps(s.WORKER_URL)) problems.push('WORKER_URL must be a public https:// address');
   if (!/\/worker\/?$/.test(String(s.WORKER_URL))) warnings.push('WORKER_URL usually ends with /worker (see the Caddyfile)');
-  if (String(s.WORKER_SECRET ?? '').length < 32) problems.push('WORKER_SECRET must be at least 32 characters, the same as in the server\'s .env');
+}
+if (pull) {
+  console.log('[i] pull mode: the worker on your PC fetches jobs from this bot. In its .env:');
+  console.log('      BOT_MODE=worker');
+  console.log(`      WORKER_SERVERLESS_URL=${s.MINI_APP_URL || 'https://app<app_id>.tgcloud.ai'}`);
+  console.log('      WORKER_SECRET=<the same as here>');
 }
 
-if (!cobalt.length && !worker) problems.push('nothing to download with: set COBALT_INSTANCES, WORKER_URL, or both');
+if (!cobalt.length && !worker) problems.push('nothing to download with: set COBALT_INSTANCES and/or the worker (WORKER_SECRET, plus WORKER_URL for a server)');
 if (!worker) warnings.push('no worker: YouTube depends on your Cobalt instance having a working YouTube session');
 if (s.MINI_APP_URL && !/^https:\/\/app\d+\.tgcloud\.ai\/?/.test(String(s.MINI_APP_URL))) {
   warnings.push('MINI_APP_URL is usually https://app<app_id>.tgcloud.ai/ — `npm run deploy` prints it');

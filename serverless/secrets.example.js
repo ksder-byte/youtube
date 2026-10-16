@@ -20,9 +20,13 @@ export default {
   // ── Download worker ─────────────────────────────────────────────────────
   // The Python app of this repo with BOT_MODE=worker. yt-dlp and ffmpeg cannot
   // run on Serverless, so YouTube goes there, and so do files over 30 MB and
-  // tracks that need muxing. Leave empty to use Cobalt only.
-  WORKER_URL: '', // 'https://dl.example.com/worker'
-  WORKER_SECRET: '', // the same as WORKER_SECRET in the server's .env
+  // tracks that need muxing. Two ways to connect it:
+  //   - a home PC with no public address: leave WORKER_URL empty and set only
+  //     WORKER_SECRET — the worker polls this bot for jobs (pull mode);
+  //   - a server with a domain: WORKER_URL = 'https://dl.example.com/worker'.
+  // Leave both empty to use Cobalt only.
+  WORKER_URL: '',
+  WORKER_SECRET: '', // at least 32 characters, the same as in the worker's .env
 
   // ── Forced subscription ─────────────────────────────────────────────────
   // '@channel' or '-100…'; empty turns the check off. The bot must be an

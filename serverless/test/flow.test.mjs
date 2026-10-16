@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test } from 'node:test';
 import callbackQuery from '../tgcloud/handlers/callback_query.js';
 import message from '../tgcloud/handlers/message.js';
 import { config } from '../tgcloud/lib/config.js';
+import { db } from './sdk/db.mjs';
 import { acquireJob, getLink, getPrefs, listHistory } from '../tgcloud/lib/store.js';
 import * as texts from '../tgcloud/lib/texts.js';
 import { BotApiError, bytes, calls, callsOf, file, fresh, json, onApi, privateMessage, serve, user } from './helpers.mjs';
@@ -318,4 +319,91 @@ test('/diag shows what Telegram\'s cloud can reach, with the real error', async 
   assert.match(text, /ip=203\.0\.113\.7 loc=NL http=http\/2 tls=TLSv1\.3/);
   assert.match(text, /❌ <code>127\.0\.0\.1:9\/<\/code>\n {3}fetch failed \(.+\)/, "the cause is shown, not just \"fetch failed\"");
   assert.match(text, /Cobalt v11\.7\.1/);
+});
+
+// ── pull mode: the worker on a home PC polls for jobs ─────────────────────
+
+const workerPoll = (await import('../tgcloud/endpoints/workerPoll.js')).default;
+const pollCtx = { initData: { user: { id: 999, first_name: 'worker' } } };
+const poll = (extra = {}) => workerPoll({ secret: SECRET, max: 5, info: { ytdlp: '2026.08.19' }, ...extra }, pollCtx);
+
+function pullMode(extra = {}) {
+  // No Cobalt reachable from the cloud: everything goes to the PC.
+  return fresh({ WORKER_SECRET: SECRET, ...extra });
+}
+
+test('pull: a worker that never polled is reported as offline', async () => {
+  await pullMode();
+  const token = await sendLink('https://youtu.be/x');
+  await press(`dl:v:720:${token}`);
+  assert.equal(lastEdit().text, texts.WORKER_OFFLINE);
+  await message(privateMessage('/status'));
+  assert.match(callsOf('sendMessage').at(-1).text, /ещё ни разу не выходил на связь/);
+});
+
+test('pull: jobs queue up, the worker takes them once and reports them done', async () => {
+  await pullMode();
+  assert.deepEqual((await poll()).jobs, []);
+
+  const token = await sendLink('https://youtu.be/aqz-KE-bpKQ');
+  await press(`dl:a:-:${token}`, 321);
+  assert.equal(lastEdit().text, texts.HANDING_OFF);
+  assert.equal((await listHistory(42))[0].status, 'worker');
+
+  // Everything goes to the PC, not only YouTube, when the cloud has no Cobalt.
+  const token2 = await sendLink('https://www.tiktok.com/@a/video/1');
+  await press(`dl:v:720:${token2}`, 322);
+  assert.equal(lastEdit().text, texts.WORKER_BUSY, 'one job per user while the first one waits');
+
+  const { jobs, pollAfter } = await poll();
+  assert.equal(pollAfter, 0, 'got work: poll again right away');
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(
+    { chat: jobs[0].job.chat_id, msg: jobs[0].job.message_id, mode: jobs[0].job.mode, q: jobs[0].job.quality, token: jobs[0].job.token },
+    { chat: 42, msg: 321, mode: 'a', q: '-', token },
+  );
+  assert.equal(jobs[0].job.prefs.audio_format, 'mp3');
+  assert.deepEqual((await poll()).jobs, [], 'a taken job is not handed out twice');
+
+  await press(`dl:v:720:${token2}`, 323);
+  assert.equal(lastEdit().text, texts.WORKER_BUSY, 'still running on the PC');
+
+  await poll({ done: [jobs[0].id] });
+  await press(`dl:v:720:${token2}`, 324);
+  assert.equal(lastEdit().text, texts.HANDING_OFF);
+  assert.equal((await poll()).jobs[0].job.url, 'https://www.tiktok.com/@a/video/1');
+
+  await message(privateMessage('/status'));
+  assert.match(callsOf('sendMessage').at(-1).text, /на связи, yt-dlp 2026\.08\.19/);
+});
+
+test('pull: a job taken long ago and never reported is dropped', async () => {
+  await pullMode();
+  await poll();
+  const token = await sendLink('https://youtu.be/x');
+  await press(`dl:v:720:${token}`);
+  assert.equal((await poll()).jobs.length, 1);
+  await db.run('UPDATE worker_queue SET taken_at = taken_at - 7200');
+  await poll();
+  await press(`dl:v:720:${token}`);
+  assert.equal(lastEdit().text, texts.HANDING_OFF, 'the user is not stuck behind a dead job');
+});
+
+test('pull: a worker silent for too long is offline again', async () => {
+  await pullMode();
+  await poll();
+  await db.run("UPDATE worker_state SET updated_at = updated_at - 600 WHERE key = 'worker_seen'");
+  const token = await sendLink('https://youtu.be/x');
+  await press(`dl:v:720:${token}`);
+  assert.equal(lastEdit().text, texts.WORKER_OFFLINE);
+  await message(privateMessage('/status'));
+  assert.match(callsOf('sendMessage').at(-1).text, /не в сети: последний раз 10 мин назад/);
+});
+
+test('pull: the endpoint wants the secret, and only in pull mode', async () => {
+  await pullMode();
+  await assert.rejects(workerPoll({ secret: 'x'.repeat(40) }, pollCtx), (e) => e.parameters?.code === 'FORBIDDEN');
+  await assert.rejects(workerPoll({}, pollCtx), (e) => e.parameters?.code === 'FORBIDDEN');
+  await withWorker();
+  await assert.rejects(poll(), (e) => e.parameters?.code === 'DISABLED');
 });

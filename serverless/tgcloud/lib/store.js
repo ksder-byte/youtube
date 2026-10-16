@@ -157,3 +157,52 @@ export async function markInstance(url, seconds, error = null) {
     ON CONFLICT (url) DO UPDATE SET unhealthy_until = excluded.unhealthy_until,
       last_error = coalesce(excluded.last_error, instance_health.last_error)`);
 }
+
+// ── pull-mode worker queue ────────────────────────────────────────────────
+
+// A job taken this long ago and never reported done died with the worker.
+const TAKEN_TTL = 20 * 60;
+
+export async function setState(key, value) {
+  await db.run(sql`
+    INSERT INTO worker_state (key, value, updated_at) VALUES (${key}, ${value}, ${now()})
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`);
+}
+
+export async function getState(key) {
+  return db.get(sql`SELECT value, updated_at FROM worker_state WHERE key = ${key}`);
+}
+
+/** Queues a job for the worker: { ok } or { ok: false, reason: offline | busy | overloaded }. */
+export async function enqueueJob(userId, job) {
+  const seen = await getState('worker_seen');
+  if (!seen || now() - seen.updated_at > config.workerOfflineAfter) return { ok: false, reason: 'offline' };
+  if (await db.get(sql`SELECT id FROM worker_queue WHERE user_id = ${userId} LIMIT 1`)) return { ok: false, reason: 'busy' };
+  const { n } = await db.get(sql`SELECT count(*) AS n FROM worker_queue`);
+  if (n >= config.workerMaxQueue) return { ok: false, reason: 'overloaded' };
+  await db.run(sql`
+    INSERT INTO worker_queue (user_id, job, status, created_at) VALUES (${userId}, ${JSON.stringify(job)}, 'queued', ${now()})`);
+  return { ok: true };
+}
+
+/** Hands up to `max` queued jobs to the worker: [{ id, job }]. */
+export async function takeJobs(max) {
+  await db.run(sql`DELETE FROM worker_queue WHERE status = 'taken' AND taken_at < ${now() - TAKEN_TTL}`);
+  if (max <= 0) return [];
+  const rows = await db.all(sql`SELECT id, job FROM worker_queue WHERE status = 'queued' ORDER BY id LIMIT ${max}`);
+  const taken = [];
+  for (const row of rows) {
+    // Guarded on status, so a job is never handed out twice.
+    const r = await db.run(sql`UPDATE worker_queue SET status = 'taken', taken_at = ${now()} WHERE id = ${row.id} AND status = 'queued'`);
+    if (r.rowsAffected === 1) taken.push({ id: row.id, job: JSON.parse(row.job) });
+  }
+  return taken;
+}
+
+export async function finishJobs(ids) {
+  for (const id of ids) await db.run(sql`DELETE FROM worker_queue WHERE id = ${id}`);
+}
+
+export async function queueLength() {
+  return (await db.get(sql`SELECT count(*) AS n FROM worker_queue`)).n;
+}

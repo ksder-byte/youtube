@@ -49,12 +49,22 @@ export function parseInstances(list, defaultKey = '') {
 export function buildConfig(s = {}) {
   const workerUrl = s.WORKER_URL ? trimSlash(s.WORKER_URL) : '';
   const workerSecret = String(s.WORKER_SECRET ?? '');
+  // push: the bot calls the worker at WORKER_URL (a server with an address).
+  // pull: the worker polls the bot for jobs (a home PC behind NAT).
+  const workerMode = ['push', 'pull'].includes(s.WORKER_MODE)
+    ? s.WORKER_MODE
+    : workerUrl ? 'push' : workerSecret.length >= 32 ? 'pull' : '';
   const inline = Number(s.INLINE_LIMIT_MB ?? FETCH_CAP_MB);
   return {
     cobaltInstances: parseInstances(s.COBALT_INSTANCES, s.COBALT_API_KEY),
     workerUrl,
     workerSecret,
-    worker: Boolean(workerUrl && workerSecret),
+    workerMode,
+    worker: Boolean(workerSecret && (workerMode === 'pull' || (workerMode === 'push' && workerUrl))),
+    // pull: a worker silent for longer than this counts as switched off.
+    workerOfflineAfter: 90,
+    workerMaxQueue: 30,
+    workerPollSeconds: 3,
     youtubeViaWorker: flag(s.YOUTUBE_VIA_WORKER, true),
     requiredChannel: String(s.REQUIRED_CHANNEL ?? '').trim(),
     requiredChannelUrl: String(s.REQUIRED_CHANNEL_URL ?? '').trim(),

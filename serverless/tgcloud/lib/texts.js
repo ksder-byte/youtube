@@ -43,6 +43,7 @@ export const NOT_CONFIGURED =
 export const WORKER_BUSY = '⏳ Загрузчик уже качает твой предыдущий файл. Дождись его, пожалуйста.';
 export const WORKER_OVERLOADED = '⏳ Загрузчик сейчас перегружен. Попробуй через пару минут.';
 export const WORKER_UNAVAILABLE = '❌ Загрузчик недоступен. Попробуй позже.';
+export const WORKER_OFFLINE = '💤 Загрузчик сейчас не в сети — компьютер, на котором он работает, выключен или без интернета. Попробуй позже.';
 export const LOCAL_PROCESSING =
   '❌ Инстанс отдал видео и звук отдельно, а склеивать их здесь нечем.\n\n' +
   'Подключи загрузчик (<code>WORKER_URL</code>) или выключи <code>FORCE_LOCAL_PROCESSING</code> у инстанса.';

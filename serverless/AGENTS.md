@@ -159,9 +159,10 @@ A Cobalt media downloader bot plus its Mini App. The repository root holds
 the Python app it grew from; here it runs as the **download worker**.
 
 - `tgcloud/lib/pipeline.js` — link → file. YouTube (and anything over 30 MB,
-  or needing ffmpeg) is handed to the worker over HTTPS (`lib/worker.js`,
-  counterpart: `../app/worker.py`); the rest goes through Cobalt
-  (`lib/cobalt.js`) and is sent from here.
+  or needing ffmpeg) is handed to the worker (`lib/worker.js`, counterpart:
+  `../app/worker.py`): pushed over HTTPS to `WORKER_URL`, or, with no URL,
+  queued in `worker_queue` for the worker to poll via `endpoints/workerPoll.js`.
+  The rest goes through Cobalt (`lib/cobalt.js`) and is sent from here.
 - `tgcloud/lib/secrets.js` — the bot's settings (no env vars on the platform).
   Git-ignored, deployed. Template: `secrets.example.js`; `npm run check`
   validates it and runs before every `npm run deploy`.

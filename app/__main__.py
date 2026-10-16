@@ -207,7 +207,7 @@ async def run(settings: Settings) -> None:
         if settings.is_worker:
             # Commands, the webhook and the subscription gate belong to the
             # serverless bot; the worker only downloads and sends.
-            await serve_worker(bot, dispatcher["ctx"], stop_event())
+            await serve_worker(bot, dispatcher["ctx"], stop_event(), bot_id=me.id)
             return
 
         if settings.subscription_required:

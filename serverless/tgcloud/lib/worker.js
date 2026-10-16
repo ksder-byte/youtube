@@ -3,10 +3,16 @@
 // The worker runs yt-dlp and ffmpeg, which a V8 sandbox cannot. It receives
 // the id of a status message this bot already sent, edits it as it goes and
 // sends the file to the chat itself, with the same bot token.
+//
+// Two ways to reach it:
+//   push — POST to WORKER_URL (the worker has a public address);
+//   pull — queue the job in the database; the worker polls endpoints/workerPoll
+//          (a home PC with no address at all).
 
 import { fetch } from 'sdk';
 import { config } from './config.js';
-import { describeError, withTimeout } from './util.js';
+import { enqueueJob, getState, queueLength } from './store.js';
+import { describeError, now, withTimeout } from './util.js';
 
 export function workerEnabled() {
   return config.worker;
@@ -17,8 +23,9 @@ function auth() {
 }
 
 /**
- * Hands a job over. Resolves to { ok: true } once the worker accepted it, or
- * { ok: false, reason } with reason: busy | overloaded | rejected | unreachable.
+ * Hands a job over. Resolves to { ok: true } once the worker accepted it (or,
+ * in pull mode, it is queued), or { ok: false, reason } with reason:
+ * busy | overloaded | offline | rejected | unreachable.
  */
 export async function submitJob({ chatId, messageId, userId, url, mode, quality, token, prefs }) {
   if (!config.worker) return { ok: false, reason: 'unreachable', detail: 'worker is not configured' };
@@ -39,6 +46,8 @@ export async function submitJob({ chatId, messageId, userId, url, mode, quality,
         }
       : {},
   };
+  if (config.workerMode === 'pull') return enqueueJob(userId, body);
+
   let res;
   try {
     res = await withTimeout(
@@ -64,6 +73,16 @@ export async function submitJob({ chatId, messageId, userId, url, mode, quality,
 /** { ok, ytdlp, jobs, … } or { ok: false, error }; never throws. */
 export async function workerHealth() {
   if (!config.worker) return { ok: false, error: 'not configured' };
+  if (config.workerMode === 'pull') {
+    const [seen, info, jobs] = await Promise.all([getState('worker_seen'), getState('worker_info'), queueLength()]);
+    let details = {};
+    try {
+      details = JSON.parse(info?.value ?? '{}');
+    } catch {}
+    const ago = seen ? now() - seen.updated_at : null;
+    const online = ago !== null && ago <= config.workerOfflineAfter;
+    return { ...details, ok: online, pull: true, lastSeenAgo: ago, jobs, max_queue: config.workerMaxQueue, error: online ? undefined : 'offline' };
+  }
   try {
     const res = await withTimeout(fetch(`${config.workerUrl}/healthz`, { headers: auth() }), 10_000);
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };

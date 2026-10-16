@@ -169,6 +169,40 @@ npm run migrate       # создаст таблицы в базе (спроси�
 - `npm run preview` — Mini App в обычном браузере на настоящих эндпоинтах и
   фейковом Cobalt (или вашем: `COBALT_INSTANCES='https://…|ключ' npm run preview`).
 
+### Загрузчик на домашнем ПК (без домена и открытых портов)
+
+Если сервера нет, но есть компьютер, на котором бот работал раньше, загрузчик
+можно запустить на нём. Он сам раз в несколько секунд забирает у бота задачи
+(режим pull): адрес, домен и проброс портов не нужны, достаточно выхода в
+интернет. YouTube снова качает yt-dlp, остальное — Cobalt на том же ПК, файлы
+до 50 МБ. Бот и Mini App отвечают круглосуточно, а скачивание работает, пока
+включён ПК; если он выключен, бот так и скажет.
+
+1. В `serverless/tgcloud/lib/secrets.js`: `WORKER_URL` пустой, `WORKER_SECRET` —
+   случайная строка от 32 символов (в PowerShell:
+   `[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')`),
+   `COBALT_INSTANCES: []` (всё пойдёт на ПК). Затем `npm run deploy` и
+   `npm run migrate` — появятся таблицы очереди.
+2. В `.env` в корне репозитория на ПК (можно взять старый):
+
+   ```env
+   BOT_TOKEN=...                                  # тот же бот
+   BOT_MODE=worker
+   WORKER_SECRET=...                              # тот же, что в secrets.js
+   WORKER_SERVERLESS_URL=https://app<id>.tgcloud.ai   # адрес Mini App
+   COBALT_API_URL=http://cobalt:9000
+   ```
+
+   `<id>` — цифры из токена CLI Access (`app<id>:…`); тот же адрес печатает
+   `npm run deploy`.
+3. `docker compose up -d --build`, затем `docker compose logs -f bot` — в логе
+   должно быть `Worker polling https://app<id>.tgcloud.ai/api/workerPoll`.
+4. `/status` в боте: «Загрузчик (на вашем ПК…) ✅ на связи».
+
+Загрузчик подписывает свои запросы токеном бота так же, как Telegram
+подписывает данные Mini App, поэтому платформа пропускает их к эндпоинту
+`workerPoll`, а `WORKER_SECRET` отличает их от вызовов пользователей.
+
 ### Без своего сервера
 
 Можно и так: оставьте `WORKER_URL` пустым и укажите в `COBALT_INSTANCES`
@@ -324,7 +358,9 @@ docker run --rm cobalt-telegram-bot:latest python -m app.instances --youtube htt
 | `BOT_TOKEN` | — | **обязательно**, токен от @BotFather |
 | `BOT_MODE` | `polling` | `worker` — только загрузчик для бота в Serverless (`docker-compose.public.yml` ставит сам) |
 | `WORKER_SECRET` | — | общий секрет с `serverless/tgcloud/lib/secrets.js`, ≥ 32 символов; обязателен для `worker` |
-| `WORKER_PORT` / `WORKER_MAX_QUEUE` | `8080` / `20` | порт загрузчика и сколько задач может ждать в очереди |
+| `WORKER_SERVERLESS_URL` | пусто | адрес Mini App бота (`https://app<id>.tgcloud.ai`): загрузчик сам забирает задачи, адрес и порты не нужны |
+| `WORKER_POLL_SECONDS` | `3` | как часто загрузчик спрашивает бота о новых задачах |
+| `WORKER_PORT` / `WORKER_MAX_QUEUE` | `8080` / `20` | порт загрузчика (без `WORKER_SERVERLESS_URL`) и сколько задач он берёт одновременно |
 | `PUBLIC_DOMAIN` | — | домен для `docker-compose.public.yml`: Caddy, сертификат, адрес туннелей Cobalt |
 | `TAKE_OVER_WEBHOOK` | `false` | разово разрешить polling-боту снять чужой вебхук (вернуть бота из Serverless) |
 | `COBALT_API_URL` | `http://cobalt:9000` | список инстансов через запятую, по приоритету; можно `url\|ключ` |
@@ -506,6 +542,9 @@ Cookies дают доступ ровно к тому, что видит ваш �
 | `The bot already has a webhook: …tgcloud…` при старте контейнера | бот живёт в Serverless, а контейнер запущен в режиме polling. Нужен `BOT_MODE=worker` (через `docker-compose.public.yml`) |
 | Бот в Serverless молчит | `npx tgcloud webhook`: вебхук должен быть «In sync». Если нет — `npx tgcloud webhook sync`. Проверьте, что старый polling-контейнер остановлен |
 | `/status`: `❌ … fetch: request failed` | облако Telegram не достучалось до адреса. Отправьте боту **/diag** (только для `ADMIN_IDS`): он проверит из облака api.telegram.org, example.com, Cloudflare и ваши инстансы и покажет причину ошибки. Если не открывается только инстанс — его хостинг или Cloudflare не пускают адреса Telegram, возьмите другой |
+| `💤 Загрузчик сейчас не в сети` | загрузчик на ПК не опрашивал бота дольше 90 секунд: ПК выключен, нет интернета или контейнер остановлен (`docker compose ps`, `docker compose logs bot`) |
+| В логе загрузчика `rejected the worker's init data` | в `.env` на ПК токен другого бота: `BOT_TOKEN` должен быть от того бота, в котором включён Serverless |
+| В логе загрузчика `WORKER_SECRET differs` | секреты в `.env` и в `secrets.js` не совпадают |
 | `❌ Загрузчик недоступен` | `curl https://<PUBLIC_DOMAIN>/worker/healthz`; `WORKER_URL` в `secrets.js` должен оканчиваться на `/worker`, `WORKER_SECRET` — совпадать с `.env` |
 | `⚙️ Бот ещё не настроен` | в `tgcloud/lib/secrets.js` пусто — `npm run check` подскажет, чего не хватает |
 | Нет кнопок Mini App | не заполнен `MINI_APP_URL` в `secrets.js`; кнопки Mini App показываются только в личных чатах |

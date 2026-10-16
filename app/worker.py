@@ -12,24 +12,36 @@ setWebhook — the webhook belongs to Serverless.
 
     POST /worker/v1/jobs     Authorization: Bearer <WORKER_SECRET>
     GET  /worker/healthz     the same header adds details
+
+That needs a public address. A home PC has none, so it can run the other way
+round instead (pull mode, WORKER_SERVERLESS_URL set): the worker polls the
+bot's `workerPoll` endpoint for queued jobs and reports the finished ones.
+Endpoints only take calls with Mini App init data, which is signed with the
+bot token — and the worker has the bot token, so it signs its own.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
+import hashlib
 import hmac
+import json
 import logging
 import re
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
+import aiohttp
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
 from aiohttp import web
 
+from . import __version__
 from . import texts, ytdlp
 from .config import AUDIO_FORMATS, VIDEO_QUALITIES, YOUTUBE_CODECS, Settings
 from .context import Context
@@ -201,20 +213,28 @@ class Worker:
         except BadJob as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
-        if len(self.tasks) >= self.ctx.settings.worker_max_queue:
+        verdict = self.accept(job)
+        if verdict == "overloaded":
             return web.json_response({"error": "overloaded"}, status=503)
-        if not self.ctx.cooldown.acquire(job.user_id):
+        if verdict == "busy":
             return web.json_response({"error": "busy"}, status=409)
-
-        task = asyncio.create_task(self.run(job))
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-        log.info("Accepted job for user %s: %s (%s)", job.user_id, job.url, job.mode)
         return web.json_response({"accepted": True, "queued": len(self.tasks)}, status=202)
 
     # ---------------------------------------------------------------- jobs
 
-    async def run(self, job: Job) -> None:
+    def accept(self, job: Job, on_finish: Callable[[], None] | None = None) -> str:
+        """Starts a job: 'accepted', or 'busy' / 'overloaded' without starting it."""
+        if len(self.tasks) >= self.ctx.settings.worker_max_queue:
+            return "overloaded"
+        if not self.ctx.cooldown.acquire(job.user_id):
+            return "busy"
+        task = asyncio.create_task(self.run(job, on_finish))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        log.info("Accepted job for user %s: %s (%s)", job.user_id, job.url, job.mode)
+        return "accepted"
+
+    async def run(self, job: Job, on_finish: Callable[[], None] | None = None) -> None:
         status = StatusMessage(self.bot, job.chat_id, job.message_id)
         try:
             async with self.ctx.slots:
@@ -239,6 +259,14 @@ class Worker:
                 await edit(status, texts.UNKNOWN_ERROR.format(error=str(exc)[:300]))
         finally:
             self.ctx.cooldown.release(job.user_id)
+            if on_finish is not None:
+                on_finish()
+
+    async def shutdown(self) -> None:
+        for task in list(self.tasks):
+            task.cancel()
+        if self.tasks:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
 
     async def _on_shutdown(self, app: web.Application) -> None:
         for task in list(self.tasks):
@@ -247,10 +275,132 @@ class Worker:
             await asyncio.gather(*self.tasks, return_exceptions=True)
 
 
-async def serve(bot: Bot, ctx: Context, stop: asyncio.Event) -> None:
-    """Serves jobs until `stop` is set."""
+# --------------------------------------------------------------------------- #
+# pull mode
+# --------------------------------------------------------------------------- #
+
+def sign_init_data(bot_token: str, user_id: int, now: float | None = None) -> str:
+    """Mini App init data for the worker itself, signed the way Telegram signs it.
+
+    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    """
+    fields = {
+        "auth_date": str(int(now if now is not None else time.time())),
+        "user": json.dumps({"id": user_id, "first_name": "download worker"}, separators=(",", ":")),
+    }
+    check = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
+    secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(fields)
+
+
+class PollRefused(RuntimeError):
+    """The bot answered, but said no; the message says what to fix."""
+
+
+class Poller:
+    """Fetches jobs from the bot on Telegram Serverless and runs them."""
+
+    def __init__(self, worker: Worker, base_url: str, bot_id: int) -> None:
+        self.worker = worker
+        self.settings = worker.ctx.settings
+        self.endpoint = base_url.rstrip("/") + "/api/workerPoll"
+        self.bot_id = bot_id
+        self.finished: list[int] = []
+
+    def _headers(self) -> dict[str, str]:
+        init_data = sign_init_data(self.settings.bot_token, self.bot_id)
+        return {
+            "Authorization": "TMA " + base64.b64encode(init_data.encode()).decode(),
+            "Content-Type": "application/json",
+            "User-Agent": f"cobalt-telegram-bot-worker/{__version__}",
+        }
+
+    async def poll_once(self, session: aiohttp.ClientSession) -> float:
+        """One round trip; returns how long to wait before the next one."""
+        done, self.finished = self.finished, []
+        free = self.settings.worker_max_queue - len(self.worker.tasks)
+        body = {
+            "secret": self.settings.worker_secret,
+            "done": done,
+            "max": max(0, min(free, 5)),
+            "info": {"ytdlp": ytdlp.version() or "", "version": __version__},
+        }
+        try:
+            async with session.post(self.endpoint, json=body, headers=self._headers()) as resp:
+                text = await resp.text()
+                status = resp.status
+        except BaseException:
+            self.finished = done + self.finished  # report them next time
+            raise
+
+        try:
+            data = json.loads(text)
+        except ValueError:
+            self.finished = done + self.finished
+            raise PollRefused(f"HTTP {status} from {self.endpoint}: not JSON. Is WORKER_SERVERLESS_URL the Mini App address?")
+        if not data.get("ok"):
+            self.finished = done + self.finished
+            if status == 401 or data.get("error_type") == "UNAUTHORIZED":
+                raise PollRefused(
+                    "Telegram Serverless rejected the worker's init data: BOT_TOKEN must be the token "
+                    "of the bot this Serverless project belongs to"
+                )
+            code = (data.get("parameters") or {}).get("code")
+            if code == "FORBIDDEN":
+                raise PollRefused("WORKER_SECRET differs from the one in serverless/tgcloud/lib/secrets.js")
+            if code == "DISABLED":
+                raise PollRefused("the bot is set up for a worker with an address: remove WORKER_URL from secrets.js")
+            raise PollRefused(f"workerPoll failed: HTTP {status} {data.get('description') or data}")
+
+        result = data.get("result") or {}
+        for item in result.get("jobs") or []:
+            queue_id = item.get("id")
+            try:
+                job = parse_job(item.get("job"))
+            except BadJob as exc:
+                log.error("Bad job %s from the bot: %s", queue_id, exc)
+                self.finished.append(queue_id)
+                continue
+            if self.worker.accept(job, on_finish=lambda qid=queue_id: self.finished.append(qid)) != "accepted":
+                # The bot keeps one job per user and never sends more than
+                # we have room for, so this is a duplicate: drop it.
+                self.finished.append(queue_id)
+        return float(result.get("pollAfter", self.settings.worker_poll_seconds))
+
+    async def run(self, stop: asyncio.Event) -> None:
+        log.info("Worker polling %s for jobs from Telegram Serverless", self.endpoint)
+        backoff = 0.0
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while not stop.is_set():
+                try:
+                    delay = await self.poll_once(session)
+                    if backoff:
+                        log.info("Back in touch with the bot")
+                    backoff = 0.0
+                except PollRefused as exc:
+                    log.error("%s", exc)
+                    delay = backoff = 60.0
+                except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                    backoff = min(max(backoff * 2, 5.0), 60.0)
+                    log.warning("Cannot reach the bot (%s), retrying in %ss", exc, int(backoff))
+                    delay = backoff
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=max(delay, 0.2))
+        await self.worker.shutdown()
+
+
+async def serve(bot: Bot, ctx: Context, stop: asyncio.Event, bot_id: int = 0) -> None:
+    """Runs jobs until `stop` is set: polls the bot if WORKER_SERVERLESS_URL
+    is set, otherwise listens for them."""
     settings = ctx.settings
-    runner = web.AppRunner(Worker(bot, ctx).app(), access_log=None)
+    worker = Worker(bot, ctx)
+    if settings.worker_pull_url:
+        await Poller(worker, settings.worker_pull_url, bot_id).run(stop)
+        return
+
+    runner = web.AppRunner(worker.app(), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, settings.worker_host, settings.worker_port)
     await site.start()
